@@ -415,6 +415,10 @@ function populateInfoTab(item) {
   }
 }
 
+function isDirectHlsBalancer(b) {
+  return ['direct', 'namy', 'kinogram', 'delivembd'].includes(b);
+}
+
 function isUsingHlsJs() {
   return Boolean(hlsInstance && window.Hls && window.Hls.isSupported());
 }
@@ -427,7 +431,7 @@ function switchAudioTrackOrRestart(voiceName) {
   const epVoices = activeEp?.voices || item.voices || [];
   const voiceIdx = Math.max(0, epVoices.indexOf(voiceName));
 
-  if (state.selectedBalancer === 'direct' && isUsingHlsJs() && hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
+  if (isDirectHlsBalancer(state.selectedBalancer) && isUsingHlsJs() && hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
     hlsInstance.audioTrack = voiceIdx;
     const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
     const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
@@ -439,7 +443,7 @@ function switchAudioTrackOrRestart(voiceName) {
 }
 
 function switchQualityLevel(qualityLabel) {
-  if (state.selectedBalancer === 'direct' && hlsInstance && hlsInstance.levels && hlsInstance.levels.length > 0) {
+  if (isDirectHlsBalancer(state.selectedBalancer) && hlsInstance && hlsInstance.levels && hlsInstance.levels.length > 0) {
     if (qualityLabel.startsWith('Авто')) {
       hlsInstance.currentLevel = -1;
     } else {
@@ -605,7 +609,7 @@ function populateFilesTab(item) {
     btn.addEventListener('click', () => {
       state.selectedVoice = btn.dataset.voice;
       state.selectedQuality = btn.dataset.quality;
-      state.selectedBalancer = btn.dataset.prov === 'vidsrc' ? 'vidsrc' : 'direct';
+      state.selectedBalancer = isDirectHlsBalancer(btn.dataset.prov) ? btn.dataset.prov : 'direct';
       updateBalancerButtons();
       populatePlayerControls(item);
       switchModalTab('player');
@@ -629,7 +633,7 @@ function updateBalancerButtons() {
     btn.classList.toggle('active', btn.dataset.balancer === state.selectedBalancer);
   });
   customStreamRow.classList.toggle('hidden', state.selectedBalancer !== 'custom');
-  sandboxRow.classList.toggle('hidden', state.selectedBalancer === 'direct');
+  sandboxRow.classList.toggle('hidden', isDirectHlsBalancer(state.selectedBalancer));
 }
 
 function destroyHls() {
@@ -654,8 +658,8 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
   const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
   nowPlayingText.textContent = `${item.title}${epPart} • ${state.selectedVoice} • ${state.selectedQuality}`;
 
-  // Direct HLS Stream
-  if (state.selectedBalancer === 'direct' && activeEp && activeEp.hlsUrl) {
+  // Direct HLS Stream (used for Прямой HLS, Collaps HLS, Kinogram HLS, Delivembed HLS — 0% ads)
+  if (isDirectHlsBalancer(state.selectedBalancer) && activeEp && activeEp.hlsUrl) {
     iframePlayerWrap.classList.add('hidden');
     balancerIframe.src = 'about:blank';
     directPlayerWrap.classList.remove('hidden');
@@ -721,7 +725,7 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
     }
   }
 
-  // Fallback or External Web Balancers
+  // Fallback: Ad-stripped embed proxy or Custom Stream
   destroyHls();
   html5Video.pause();
   html5Video.removeAttribute('src');
@@ -732,18 +736,7 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
 
   applyIframeSandbox();
 
-  const idPath = item.kpId ? `/embed/kp/${encodeURIComponent(item.kpId)}` : `/embed/imdb/${encodeURIComponent(item.imdbId)}`;
-  const seasonParams = isEpisodic ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
-
-  if (state.selectedBalancer === 'namy' || (state.selectedBalancer === 'direct' && !activeEp?.hlsUrl)) {
-    balancerIframe.src = `https://api.namy.ws${idPath}${seasonParams}`;
-  } else if (state.selectedBalancer === 'kinogram') {
-    balancerIframe.src = `https://api.kinogram.best${idPath}${seasonParams}`;
-  } else if (state.selectedBalancer === 'vidsrc') {
-    balancerIframe.src = isEpisodic
-      ? `https://vidsrc.su/embed/tv/${encodeURIComponent(item.imdbId)}/${state.selectedSeason}/${state.selectedEpisode}`
-      : `https://vidsrc.su/embed/movie/${encodeURIComponent(item.imdbId)}`;
-  } else if (state.selectedBalancer === 'custom') {
+  if (state.selectedBalancer === 'custom') {
     const customUrl = customStreamInput.value.trim();
     if (!customUrl) return;
     if (customUrl.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
@@ -761,6 +754,15 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
     } else {
       balancerIframe.src = customUrl;
     }
+  } else {
+    const cleanParams = new URLSearchParams({
+      imdb: item.imdbId || '',
+      kp: item.kpId || '',
+      mirror: state.selectedBalancer === 'custom' ? 'namy' : state.selectedBalancer,
+      season: String(state.selectedSeason || 1),
+      episode: String(state.selectedEpisode || 1)
+    });
+    balancerIframe.src = `/api/embed-clean?${cleanParams.toString()}`;
   }
 }
 
@@ -1004,17 +1006,41 @@ modalFavBtn.addEventListener('click', () => {
 });
 
 balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    state.selectedBalancer = btn.dataset.balancer;
+  btn.addEventListener('click', async () => {
+    const nextBalancer = btn.dataset.balancer;
+    state.selectedBalancer = nextBalancer;
     updateBalancerButtons();
-    startPlayback(html5Video.currentTime || 0, true);
+    const resumeAt = html5Video.currentTime || 0;
+
+    if (isDirectHlsBalancer(nextBalancer) && state.currentItem) {
+      const activeEp = getActiveEpisodeObj(state.currentItem);
+      if (!activeEp?.hlsUrl || ['namy', 'kinogram', 'delivembd'].includes(nextBalancer)) {
+        try {
+          nowPlayingText.textContent = `Переключение зеркала (${btn.textContent})...`;
+          const res = await fetch(
+            `/api/details?imdb=${encodeURIComponent(state.currentItem.imdbId)}&title=${encodeURIComponent(state.currentItem.title)}&mirror=${encodeURIComponent(nextBalancer)}`
+          );
+          const refreshed = await res.json();
+          if (refreshed && refreshed.seasons) {
+            state.currentItem.seasons = refreshed.seasons;
+            if (refreshed.voices && refreshed.voices.length) state.currentItem.voices = refreshed.voices;
+            if (refreshed.providers) state.currentItem.providers = refreshed.providers;
+            populatePlayerControls(state.currentItem);
+          }
+        } catch (e) {}
+      }
+      startPlayback(resumeAt, true);
+      showPlayerOsd(`Источник: ${btn.textContent}`);
+    } else {
+      startPlayback(resumeAt, true);
+    }
   });
 });
 
 applyCustomStreamBtn.addEventListener('click', () => startPlayback(0, true));
 sandboxToggle.addEventListener('change', () => {
   applyIframeSandbox();
-  if (state.selectedBalancer !== 'direct') startPlayback(0, true);
+  if (!isDirectHlsBalancer(state.selectedBalancer)) startPlayback(0, true);
 });
 
 prevEpBtn.addEventListener('click', () => {

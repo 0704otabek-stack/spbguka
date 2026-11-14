@@ -583,6 +583,32 @@ const SEED_CATALOG = [
 ];
 
 const searchCache = new Map();
+const streamCache = new Map();
+
+function getMirrorList(preferredMirror = 'direct') {
+  if (preferredMirror === 'kinogram') {
+    return [
+      'https://api.kinogram.best',
+      'https://api.namy.ws',
+      'https://api.delivembd.ws',
+      'https://api.embess.ws'
+    ];
+  }
+  if (preferredMirror === 'delivembd') {
+    return [
+      'https://api.delivembd.ws',
+      'https://api.embess.ws',
+      'https://api.namy.ws',
+      'https://api.kinogram.best'
+    ];
+  }
+  return [
+    'https://api.namy.ws',
+    'https://api.kinogram.best',
+    'https://api.embess.ws',
+    'https://api.delivembd.ws'
+  ];
+}
 
 function sendJson(res, status, data) {
   res.writeHead(status, {
@@ -615,13 +641,14 @@ function extractJsonArray(str, startIdx) {
 }
 
 // Parse real HLS streams, seasons, episodes, and Russian studio voiceover tracks from Namy / Kinogram / Embess / Delivembd balancers
-async function parseLiveStreamBalancer(imdbId, kpId) {
-  const mirrors = [
-    'https://api.namy.ws',
-    'https://api.kinogram.best',
-    'https://api.embess.ws',
-    'https://api.delivembd.ws'
-  ];
+async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
+  const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
+  const cached = streamCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < 10 * 60 * 1000) {
+    return cached.data;
+  }
+
+  const mirrors = getMirrorList(preferredMirror);
 
   const paths = [];
   if (kpId) paths.push(`/embed/kp/${kpId}`);
@@ -631,7 +658,7 @@ async function parseLiveStreamBalancer(imdbId, kpId) {
     for (const p of paths) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4500);
+        const timeout = setTimeout(() => controller.abort(), 7000);
         const r = await fetch(mirror + p, {
           headers: { 'User-Agent': UPSTREAM_UA },
           signal: controller.signal
@@ -683,13 +710,15 @@ async function parseLiveStreamBalancer(imdbId, kpId) {
               }
             }
 
-            return {
+            const result = {
               found: true,
               isSeries: true,
               embedUrl: mirror + p,
               seasons: seasonsMap,
               voices: Array.from(allVoicesSet)
             };
+            streamCache.set(cacheKey, { ts: Date.now(), data: result });
+            return result;
           }
         }
 
@@ -704,7 +733,7 @@ async function parseLiveStreamBalancer(imdbId, kpId) {
           }
 
           const hlsProxyUrl = `/api/hls-proxy?url=${encodeURIComponent(signedHls)}`;
-          return {
+          const result = {
             found: true,
             isSeries: false,
             embedUrl: mirror + p,
@@ -724,6 +753,8 @@ async function parseLiveStreamBalancer(imdbId, kpId) {
               ]
             }
           };
+          streamCache.set(cacheKey, { ts: Date.now(), data: result });
+          return result;
         }
       } catch (e) {
         // try next mirror/path
@@ -879,7 +910,7 @@ async function handleSearch(query) {
   return merged;
 }
 
-async function handleDetails(imdbId, fallbackTitle) {
+async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') {
   let baseItem = SEED_CATALOG.find(x => x.imdbId === imdbId);
   if (!baseItem) {
     for (const list of searchCache.values()) {
@@ -911,10 +942,13 @@ async function handleDetails(imdbId, fallbackTitle) {
       voices: ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'LostFilm', 'Кубик в кубе'],
       description: ''
     };
-    const enriched = await enrichWithRussianMetadata([baseItem]);
-    baseItem = enriched[0];
   } else {
     baseItem = { ...baseItem };
+  }
+
+  if (!baseItem.kpId && baseItem.imdbId) {
+    const enriched = await enrichWithRussianMetadata([baseItem]);
+    baseItem = enriched[0];
   }
 
   // Run Russian Wikipedia summary lookup and Live Balancer HLS extraction in parallel!
@@ -942,7 +976,7 @@ async function handleDetails(imdbId, fallbackTitle) {
       } catch (e) {}
       return '';
     })(),
-    parseLiveStreamBalancer(baseItem.imdbId, baseItem.kpId)
+    parseLiveStreamBalancer(baseItem.imdbId, baseItem.kpId, preferredMirror)
   ]);
 
   if (wikiExtract) {
@@ -976,10 +1010,10 @@ async function handleDetails(imdbId, fallbackTitle) {
   }
 
   const providers = [
-    { id: 'direct', name: 'СПБГУКА Direct HLS (Прямой поток без рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' },
-    { id: 'namy', name: 'Collaps / Namy Mirror (Все озвучки СНГ)', badge: '1080p', speed: '98 Мбит/с' },
-    { id: 'kinogram', name: 'Kinogram / Delivembed Mirror', badge: '1080p', speed: '94 Мбит/с' },
-    { id: 'vidsrc', name: 'VidSrc.su / 2Embed Global', badge: '1080p FHD', speed: '88 Мбит/с' }
+    { id: 'direct', name: 'СПБГУКА Direct HLS (Чистый поток • 0% рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' },
+    { id: 'namy', name: 'Collaps HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '110 Мбит/с' },
+    { id: 'kinogram', name: 'Kinogram HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '105 Мбит/с' },
+    { id: 'delivembd', name: 'Delivembed HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '98 Мбит/с' }
   ];
 
   const qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
@@ -1119,6 +1153,66 @@ async function handleHlsProxy(req, res, targetUrl, audioIdxParam, singleAudioPar
   }
 }
 
+// Ad-Stripped Fallback Embed Proxy: strips VAST/pop/banner ad configs and routes HLS through /api/hls-proxy
+async function handleEmbedClean(req, res, parsedUrl) {
+  const imdb = parsedUrl.searchParams.get('imdb') || '';
+  const kp = parsedUrl.searchParams.get('kp') || '';
+  const mirrorParam = parsedUrl.searchParams.get('mirror') || 'namy';
+  const season = parsedUrl.searchParams.get('season');
+  const episode = parsedUrl.searchParams.get('episode');
+
+  const mirrors = getMirrorList(mirrorParam);
+  const query = (season && episode)
+    ? `?season=${encodeURIComponent(season)}&episode=${encodeURIComponent(episode)}`
+    : '';
+  const paths = [];
+  if (kp) paths.push(`/embed/kp/${encodeURIComponent(kp)}${query}`);
+  if (imdb) paths.push(`/embed/imdb/${encodeURIComponent(imdb)}${query}`);
+
+  for (const mirror of mirrors) {
+    for (const p of paths) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 7000);
+        const r = await fetch(mirror + p, {
+          headers: { 'User-Agent': UPSTREAM_UA },
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        if (!r.ok) continue;
+
+        let html = await r.text();
+        if (!html.includes('makePlayer({')) continue;
+
+        html = html
+          .replace(/<head([^>]*)>/i, `<head$1><base href="${mirror}/">`)
+          .replace(/<script\s+data-name="ad">[\s\S]*?<\/script>/gi, '<script data-name="ad">var middleCount = 0, adTimeouts = {}, adsConfig = {};</script>')
+          .replace(/ads:\s*adsConfig/g, 'ads: undefined')
+          .replace(/distribrey\.com/gi, '')
+          .replace(/getsdk\.online/gi, '')
+          .replace(
+            /else\s+o\[k\]\s*\+=\s*'&'\s*\+\s*(\w+);/,
+            `else { o[k]+='&'+$1; if(k==='hls'){ o[k]=location.origin+'/api/hls-proxy?url='+encodeURIComponent(o[k]); delete o.dash; delete o.dasha; } }`
+          );
+
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store, no-cache, must-revalidate'
+        });
+        return res.end(html);
+      } catch (e) {
+        // try next mirror/path
+      }
+    }
+  }
+
+  res.writeHead(404, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store'
+  });
+  res.end('<!DOCTYPE html><html><body style="margin:0;background:#09090b;color:#a1a1aa;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;">Поток временно недоступен на выбранном зеркале. Попробуйте Прямой HLS.</body></html>');
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -1143,6 +1237,10 @@ const server = http.createServer(async (req, res) => {
     const audioParam = parsedUrl.searchParams.get('audio');
     const singleAudioParam = parsedUrl.searchParams.get('singleAudio');
     return handleHlsProxy(req, res, targetUrl, audioParam, singleAudioParam);
+  }
+
+  if (pathname === '/api/embed-clean') {
+    return handleEmbedClean(req, res, parsedUrl);
   }
 
   if (pathname === '/api/catalog') {
@@ -1189,7 +1287,8 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/details') {
     const imdb = parsedUrl.searchParams.get('imdb') || 'tt0903747';
     const title = parsedUrl.searchParams.get('title') || '';
-    const details = await handleDetails(imdb, title);
+    const mirror = parsedUrl.searchParams.get('mirror') || 'direct';
+    const details = await handleDetails(imdb, title, mirror);
     return sendJson(res, 200, details);
   }
 
@@ -1207,7 +1306,10 @@ const server = http.createServer(async (req, res) => {
       return res.end('Not found');
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-store, no-cache, must-revalidate'
+    });
     res.end(content);
   });
 });
