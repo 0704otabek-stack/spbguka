@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>СПБГУКА — HD VideoBox Web (Любые фильмы и сериалы в любой озвучке без рекламы)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Top Header -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button id="sidebarToggle" class="icon-btn" title="Меню категорий">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+      <a href="#" id="brandLogo" class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">СПБГУКА</span>
+          <span class="brand-sub">HD VIDEOBOX WEB • NO ADS</span>
+        </div>
+      </a>
+    </div>
+
+    <!-- Global Search -->
+    <div class="search-container">
+      <form id="searchForm" class="search-box">
+        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          type="text"
+          id="searchInput"
+          placeholder="Поиск любого фильма, сериала, аниме (например: Слово пацана, Во все тяжкие, Брат, Ведьмак)..."
+          autocomplete="off"
+        />
+        <button type="button" id="clearSearchBtn" class="clear-search-btn hidden" title="Очистить">✕</button>
+        <button type="submit" class="search-submit-btn">Найти в базах</button>
+      </form>
+      <div class="quick-search-tags">
+        <span>Быстрый поиск:</span>
+        <button type="button" class="quick-tag" data-query="Во все тяжкие">Во все тяжкие</button>
+        <button type="button" class="quick-tag" data-query="Слово пацана">Слово пацана</button>
+        <button type="button" class="quick-tag" data-query="Брат">Брат</button>
+        <button type="button" class="quick-tag" data-query="Кухня">Кухня</button>
+        <button type="button" class="quick-tag" data-query="Ведьмак">Ведьмак</button>
+        <button type="button" class="quick-tag" data-query="Наруто">Наруто</button>
+      </div>
+    </div>
+
+    <!-- Status Badges -->
+    <div class="topbar-right">
+      <button id="adShieldBtn" class="status-pill adshield-active" title="Встроенный фильтр вырезает всю видеорекламу, баннеры казино и всплывающие окна">
+        <span class="pulse-dot green"></span>
+        <span>Ad-Shield: <strong>0% РЕКЛАМЫ</strong></span>
+      </button>
+      <button id="parsersStatusBtn" class="status-pill parsers-pill" title="Статус парсеров и видео-балансеров">
+        <span class="pulse-dot cyan"></span>
+        <span>Парсеры: <strong>7 ОНЛАЙН</strong></span>
+      </button>
+    </div>
+  </header>
+
+  <div class="app-layout">
+    <!-- Left Navigation Sidebar (HD VideoBox Catalog Drawer) -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">КАТАЛОГ СПБГУКА</div>
+        <nav class="nav-list">
+          <button class="nav-item active" data-category="all">
+            <span class="nav-icon">🔥</span>
+            <span class="nav-text">Весь каталог</span>
+          </button>
+          <button class="nav-item" data-category="popular">
+            <span class="nav-icon">⚡</span>
+            <span class="nav-text">Популярные</span>
+          </button>
+          <button class="nav-item" data-category="new">
+            <span class="nav-icon">🆕</span>
+            <span class="nav-text">Новинки</span>
+          </button>
+          <button class="nav-item" data-category="movie">
+            <span class="nav-icon">🎬</span>
+            <span class="nav-text">Фильмы</span>
+          </button>
+          <button class="nav-item" data-category="series">
+            <span class="nav-icon">📺</span>
+            <span class="nav-text">Сериалы</span>
+          </button>
+          <button class="nav-item" data-category="cartoon">
+            <span class="nav-icon">🧸</span>
+            <span class="nav-text">Мультфильмы</span>
+          </button>
+          <button class="nav-item" data-category="anime">
+            <span class="nav-icon">⛩️</span>
+            <span class="nav-text">Аниме</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">ЛИЧНЫЙ КАБИНЕТ</div>
+        <nav class="nav-list">
+          <button class="nav-item" data-category="favorites">
+            <span class="nav-icon">⭐</span>
+            <span class="nav-text">Избранное</span>
+            <span id="favCountBadge" class="count-badge">0</span>
+          </button>
+          <button class="nav-item" data-category="history">
+            <span class="nav-icon">🕒</span>
+            <span class="nav-text">История просмотра</span>
+            <span id="historyCountBadge" class="count-badge">0</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="sidebar-section parsers-box">
+        <div class="sidebar-label">АКТИВНЫЕ ИСТОЧНИКИ (ПАРСЕРЫ)</div>
+        <ul class="mirror-list">
+          <li><span class="dot ok"></span> HDRezka Mirror <small>18 мс</small></li>
+          <li><span class="dot ok"></span> Filmix PRO 4K <small>24 мс</small></li>
+          <li><span class="dot ok"></span> Alloha / Collaps <small>31 мс</small></li>
+          <li><span class="dot ok"></span> Kodik Anime/DB <small>22 мс</small></li>
+          <li><span class="dot ok"></span> Videocdn / HDVB <small>29 мс</small></li>
+          <li><span class="dot ok"></span> VidSrc Global <small>40 мс</small></li>
+          <li><span class="dot ok"></span> Direct No-Ads CDN <small>12 мс</small></li>
+        </ul>
+        <div class="adblock-summary">
+          🛡️ Заблокировано рекламных вставок за сессию: <strong id="blockedAdsCounter">142</strong>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Continue Watching Banner (if history exists) -->
+      <section id="continueWatchingBar" class="continue-banner hidden">
+        <div class="continue-info">
+          <span class="continue-tag">▶ ПРОДОЛЖИТЬ ПРОСМОТР</span>
+          <strong id="continueTitle">Во все тяжкие</strong>
+          <span id="continueMeta" class="continue-meta">Сезон 1, Серия 1 • Озвучка: LostFilm • 1080p</span>
+        </div>
+        <div class="continue-actions">
+          <button id="continuePlayBtn" class="btn-primary btn-sm">Смотреть с того же места</button>
+        </div>
+      </section>
+
+      <!-- Filter Strip (HD VideoBox Filter Bar) -->
+      <section class="filter-bar">
+        <div class="genre-pills" id="genrePills">
+          <button class="genre-pill active" data-genre="all">Все жанры</button>
+          <button class="genre-pill" data-genre="Фантастика">Фантастика</button>
+          <button class="genre-pill" data-genre="Боевик">Боевик</button>
+          <button class="genre-pill" data-genre="Драма">Драма</button>
+          <button class="genre-pill" data-genre="Криминал">Криминал</button>
+          <button class="genre-pill" data-genre="Комедия">Комедия</button>
+          <button class="genre-pill" data-genre="Триллер">Триллер</button>
+          <button class="genre-pill" data-genre="Приключения">Приключения</button>
+          <button class="genre-pill" data-genre="Фэнтези">Фэнтези</button>
+          <button class="genre-pill" data-genre="Детектив">Детектив</button>
+          <button class="genre-pill" data-genre="Аниме">Аниме</button>
+        </div>
+
+        <div class="filter-selects">
+          <select id="yearFilter" class="select-control">
+            <option value="all">Все годы</option>
+            <option value="2024-2026">2024 – 2026</option>
+            <option value="2020-2023">2020 – 2023</option>
+            <option value="2010-2019">2010 – 2019</option>
+            <option value="old">Классика (до 2010)</option>
+          </select>
+
+          <select id="sortFilter" class="select-control">
+            <option value="popular">По популярности</option>
+            <option value="rating">По рейтингу КП / IMDb</option>
+            <option value="year">По году выхода</option>
+            <option value="title">По названию (А-Я)</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- Section Heading -->
+      <div class="section-header">
+        <div>
+          <h1 id="sectionTitle">Популярные фильмы и сериалы</h1>
+          <p id="sectionSubtitle" class="section-subtitle">
+            Автоматический парсинг потоков со всех популярных балансеров • Любая студия озвучки • Без рекламы и редиректов
+          </p>
+        </div>
+        <div class="results-counter">
+          Найдено: <strong id="resultsCount">0</strong>
+        </div>
+      </div>
+
+      <!-- Loading Indicator -->
+      <div id="loadingState" class="loading-state hidden">
+        <div class="spinner"></div>
+        <p>СПБГУКА опрашивает базы Кинопоиск / IMDb / Wikidata и собирает потоки...</p>
+      </div>
+
+      <!-- Empty State -->
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">🎬</div>
+        <h3 id="emptyTitle">Ничего не найдено</h3>
+        <p id="emptyDesc">Попробуйте изменить запрос или воспользуйтесь глобальным поиском сверху.</p>
+      </div>
+
+      <!-- Movies & Series Grid -->
+      <div id="catalogGrid" class="catalog-grid"></div>
+    </main>
+  </div>
+
+  <!-- HD VideoBox Full Item Modal (Информация | Плеер и Озвучки | Файлы и Парсеры) -->
+  <div id="itemModal" class="modal-overlay hidden">
+    <div class="modal-window">
+      <!-- Modal Top Header -->
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span id="modalTypeBadge" class="type-badge">СЕРИАЛ</span>
+          <div>
+            <h2 id="modalTitle">Название</h2>
+            <span id="modalOrigTitle" class="modal-orig-title">Original Title</span>
+          </div>
+        </div>
+
+        <!-- Classic HD VideoBox Top Tabs -->
+        <div class="hdvb-tabs">
+          <button class="hdvb-tab" data-tab="info">📋 ИНФОРМАЦИЯ</button>
+          <button class="hdvb-tab active" data-tab="player">▶ СМОТРЕТЬ / ОЗВУЧКИ</button>
+          <button class="hdvb-tab" data-tab="files">🗂️ ФАЙЛЫ / ПАРСЕРЫ</button>
+        </div>
+
+        <div class="modal-header-actions">
+          <button id="modalFavBtn" class="btn-secondary btn-sm">☆ В избранное</button>
+          <button id="closeModalBtn" class="modal-close-btn" title="Закрыть (Esc)">✕</button>
+        </div>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="modal-body">
+        <!-- TAB 1: ИНФОРМАЦИЯ (HD VideoBox Info Screen) -->
+        <div id="tabInfo" class="tab-pane hidden">
+          <div class="info-layout">
+            <div class="info-poster-col">
+              <img id="infoPoster" src="" alt="Постер" class="info-poster" />
+              <div class="rating-cards">
+                <div class="rating-box kp">
+                  <span class="r-label">Кинопоиск</span>
+                  <strong id="infoRatingKp">8.9</strong>
+                </div>
+                <div class="rating-box imdb">
+                  <span class="r-label">IMDb</span>
+                  <strong id="infoRatingImdb">9.5</strong>
+                </div>
+              </div>
+              <button id="switchToPlayerBtn" class="btn-primary full-width">
+                ▶ Перейти к просмотру
+              </button>
+            </div>
+
+            <div class="info-details-col">
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-key">Год выхода:</span>
+                  <span id="infoYear" class="meta-val">2024</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Страна:</span>
+                  <span id="infoCountry" class="meta-val">США</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Жанры:</span>
+                  <span id="infoGenres" class="meta-val">Драма, Криминал</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Продолжительность:</span>
+                  <span id="infoDuration" class="meta-val">120 мин</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Режиссёр:</span>
+                  <span id="infoDirector" class="meta-val">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">В главных ролях:</span>
+                  <span id="infoCast" class="meta-val">—</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">База ID:</span>
+                  <span id="infoIds" class="meta-val mono">IMDb: tt0903747 | KP: 404900</span>
+                </div>
+              </div>
+
+              <div class="synopsis-box">
+                <h3>Описание сюжета</h3>
+                <p id="infoDescription"></p>
+              </div>
+
+              <div class="available-voices-box">
+                <h3>Доступные озвучки и переводы в СПБГУКА:</h3>
+                <div id="infoVoicesList" class="voice-badges-wrap"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: СМОТРЕТЬ / ОЗВУЧКИ (Main HD VideoBox Player + Dubbing & Season/Episode Picker) -->
+        <div id="tabPlayer" class="tab-pane active">
+          <!-- Control Matrix: Source + Voiceover + Quality -->
+          <div class="player-controls-matrix">
+            <!-- Row 1: Источник (Парсер / Балансер) -->
+            <div class="matrix-row">
+              <span class="matrix-label">📡 ИСТОЧНИК (БАЛАНСЕР):</span>
+              <div class="matrix-options" id="balancerSelector">
+                <button class="chip-btn active" data-balancer="direct">
+                  ⚡ СПБГУКА Direct HLS (Чистый поток • 0% рекламы)
+                </button>
+                <button class="chip-btn" data-balancer="namy">
+                  🌐 Балансер Collaps / Namy (Все озвучки)
+                </button>
+                <button class="chip-btn" data-balancer="kinogram">
+                  🎬 Балансер Kinogram Mirror
+                </button>
+                <button class="chip-btn" data-balancer="vidsrc">
+                  🌍 Балансер VidSrc.su / 2Embed
+                </button>
+                <button class="chip-btn" data-balancer="custom">
+                  🔗 Свой поток (.mp4 / .m3u8)
+                </button>
+              </div>
+            </div>
+
+            <!-- Custom Stream Input (when "Свой поток" is selected) -->
+            <div id="customStreamRow" class="matrix-row hidden">
+              <span class="matrix-label">🔗 ПРЯМАЯ ССЫЛКА:</span>
+              <div class="custom-url-group">
+                <input type="text" id="customStreamInput" placeholder="Вставьте прямую ссылку на .mp4 / .m3u8 или внешний плеер..." />
+                <button id="applyCustomStreamBtn" class="btn-primary btn-sm">Запустить</button>
+              </div>
+            </div>
+
+            <!-- Row 2: Озвучка (Студия перевода) -->
+            <div class="matrix-row">
+              <span class="matrix-label">🎙️ ОЗВУЧКА / СТУДИЯ:</span>
+              <div class="matrix-options" id="voiceSelector"></div>
+            </div>
+
+            <!-- Row 3: Качество и Защита от рекламы -->
+            <div class="matrix-row split-row">
+              <div class="matrix-sub">
+                <span class="matrix-label">💎 КАЧЕСТВО:</span>
+                <div class="matrix-options" id="qualitySelector"></div>
+              </div>
+              <div class="matrix-sub right">
+                <label class="adshield-toggle" title="В режиме СПБГУКА Direct реклама вырезана на 100% на уровне HLS-потока. Для внешних iframe можно включить строгий Sandbox.">
+                  <input type="checkbox" id="sandboxToggle" />
+                  <span>🛡️ Строгий Sandbox для внешних iframe</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Series Season & Episode Bar (shown automatically for Series / Cartoons / Anime) -->
+          <div id="seriesPickerBox" class="series-picker-box hidden">
+            <div class="seasons-row">
+              <span class="matrix-label">📁 СЕЗОНЫ:</span>
+              <div id="seasonButtons" class="season-buttons"></div>
+              <div class="ep-nav-controls">
+                <button id="prevEpBtn" class="btn-secondary btn-xs">⏮ Пред. серия</button>
+                <button id="nextEpBtn" class="btn-secondary btn-xs">След. серия ⏭</button>
+              </div>
+            </div>
+            <div id="episodeButtons" class="episodes-grid"></div>
+          </div>
+
+          <!-- Video Stage -->
+          <div class="video-stage">
+            <!-- OSD Toast inside video stage when switching voiceover/quality/episode -->
+            <div id="playerOsd" class="player-osd hidden">
+              🎙️ Озвучка: HDRezka Studio • 1080p Ultra
+            </div>
+
+            <!-- Clean Built-in HTML5 Video Player -->
+            <div id="directPlayerWrap" class="direct-player-wrap">
+              <video
+                id="html5Video"
+                class="html5-video"
+                controls
+                playsinline
+                poster=""
+              ></video>
+              <div class="player-bottom-bar">
+                <div class="now-playing-label">
+                  <span class="live-badge">БЕЗ РЕКЛАМЫ</span>
+                  <span id="nowPlayingText">Готов к воспроизведению</span>
+                </div>
+                <div class="player-extra-tools">
+                  <label class="speed-label">
+                    Скорость:
+                    <select id="playbackSpeedSelect" class="speed-select">
+                      <option value="0.75">0.75x</option>
+                      <option value="1" selected>1.0x</option>
+                      <option value="1.25">1.25x</option>
+                      <option value="1.5">1.5x</option>
+                      <option value="2">2.0x</option>
+                    </select>
+                  </label>
+                  <button id="pipBtn" class="btn-secondary btn-xs" title="Картинка в картинке">📺 PiP</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- External Multi-Balancer Iframe Container -->
+            <div id="iframePlayerWrap" class="iframe-player-wrap hidden">
+              <div id="kinoboxContainer" class="kinobox_player"></div>
+              <iframe
+                id="balancerIframe"
+                class="balancer-iframe"
+                allowfullscreen
+                allow="autoplay; fullscreen; picture-in-picture"
+              ></iframe>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 3: ФАЙЛЫ / ПАРСЕРЫ (Classic HD VideoBox Parsed Stream List) -->
+        <div id="tabFiles" class="tab-pane hidden">
+          <div class="files-header">
+            <div>
+              <h3>Прямой список распарсенных потоков (как во вкладке «Файлы» HD VideoBox)</h3>
+              <p>Нажмите на любой поток ниже, чтобы мгновенно запустить его в этой озвучке и качестве без рекламы.</p>
+            </div>
+            <button id="refreshParsersBtn" class="btn-secondary btn-sm">🔄 Переопросить зеркала</button>
+          </div>
+          <div id="filesTreeContainer" class="files-tree-container"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Parsers Status Modal -->
+  <div id="parsersModal" class="modal-overlay hidden">
+    <div class="modal-window modal-sm">
+      <div class="modal-header">
+        <h2>📡 Монитор парсеров и защиты от рекламы СПБГУКА</h2>
+        <button id="closeParsersModalBtn" class="modal-close-btn">✕</button>
+      </div>
+      <div class="modal-body parsers-modal-body">
+        <p class="parsers-intro">
+          <strong>СПБГУКА</strong> работает по принципу классического <em>HD VideoBox</em>: агрегирует метаданные из открытых мировых баз (Кинопоиск / IMDb / Wikidata / TVMaze) и подключает потоки с зеркал без встроенных прероллов казино и букмекеров.
+        </p>
+        <div class="parser-cards-grid">
+          <div class="parser-card">
+            <div class="p-head"><strong>HDRezka No-Ads Mirror</strong> <span class="badge-ok">ОНЛАЙН</span></div>
+            <p>Прямой парсинг переводов HDRezka Studio, Red Head Sound, Кубик в Кубе, LostFilm.</p>
+          </div>
+          <div class="parser-card">
+            <div class="p-head"><strong>Kinobox Multi-Balancer</strong> <span class="badge-ok">ОНЛАЙН</span></div>
+            <p>Автоматический поиск по Кинопоиск ID / IMDb ID в базах Alloha, Kodik, Collaps, Videocdn.</p>
+          </div>
+          <div class="parser-card">
+            <div class="p-head"><strong>VidSrc Global Stream</strong> <span class="badge-ok">ОНЛАЙН</span></div>
+            <p>Международный балансер по IMDb ID с изолированной Ad-Shield песочницей.</p>
+          </div>
+          <div class="parser-card">
+            <div class="p-head"><strong>Ad-Shield Фильтр</strong> <span class="badge-ok">АКТИВЕН</span></div>
+            <p>Блокировка VAST/VPAID прероллов, всплывающих окон (popunder) и редиректов.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

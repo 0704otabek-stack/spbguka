@@ -1,0 +1,13 @@
+{
+  "name": "spbguka-hdvideobox-web",
+  "version": "2.0.0",
+  "description": "СПБГУКА — Веб-версия HD VideoBox без рекламы с мульти-парсером и выбором любой озвучки",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
