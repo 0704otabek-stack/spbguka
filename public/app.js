@@ -6,6 +6,7 @@ const state = {
   year: 'all',
   sort: 'popular',
   searchQuery: '',
+  masterCatalog: null,
   catalogItems: [],
   featuredItem: null,
   favorites: JSON.parse(localStorage.getItem('spbguka_favorites') || '[]'),
@@ -24,6 +25,10 @@ let currentLoadedHlsUrl = '';
 let currentManifestBlobUrl = '';
 let playbackRequestToken = 0;
 let modalOpenToken = 0;
+let searchReqToken = 0;
+let searchDebounceTimer = null;
+let lastHistorySaveTs = 0;
+let filesTabDirty = true;
 let osdTimeout = null;
 let currentTvFocusedEl = null;
 
@@ -76,8 +81,107 @@ function extractJsonArray(str, startIdx) {
   return null;
 }
 
+async function probeClientMirror(mirror, paths) {
+  for (const p of paths) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const r = await fetch(mirror + p, {
+        credentials: 'omit',
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+      if (!r.ok) continue;
+
+      const html = await r.text();
+      const mkIdx = html.lastIndexOf('makePlayer({');
+      if (mkIdx === -1) continue;
+
+      const tokenMatch = html.match(/var\s+lok\s*=\s*\d+\s*,\s*\w+\s*=\s*"([^"]+)"/);
+      const token = tokenMatch?.[1] || '';
+      const mkBlock = html.slice(mkIdx);
+
+      // Series / Cartoon / Anime with playlist seasons
+      const sIdx = mkBlock.indexOf('seasons:');
+      if (sIdx !== -1) {
+        const jsonStr = extractJsonArray(mkBlock, sIdx);
+        if (jsonStr) {
+          const rawSeasons = JSON.parse(jsonStr);
+          const seasonsMap = {};
+          const allVoicesSet = new Set();
+
+          for (const sObj of rawSeasons) {
+            const sNum = Number(sObj.season) || 1;
+            seasonsMap[sNum] = [];
+            for (const ep of (sObj.episodes || [])) {
+              const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
+              const epVoices = ep.audio?.names || ['Русский перевод'];
+              epVoices.forEach(v => allVoicesSet.add(v));
+
+              const signedHls = ep.hls ? (token ? `${ep.hls}&${token}` : ep.hls) : '';
+              seasonsMap[sNum].push({
+                season: sNum,
+                episode: epNum,
+                title: ep.title || `Серия ${epNum}`,
+                duration: Math.round((ep.duration || 2700) / 60),
+                hlsUrl: signedHls,
+                rawHls: signedHls,
+                voices: epVoices,
+                subtitles: (ep.cc || []).map(c => ({ name: c.name, url: c.url }))
+              });
+            }
+          }
+
+          return {
+            found: true,
+            isSeries: true,
+            embedUrl: mirror + p,
+            seasons: seasonsMap,
+            voices: Array.from(allVoicesSet)
+          };
+        }
+      }
+
+      // Single Movie with source.hls
+      const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
+      if (hlsMatch) {
+        const signedHls = token ? `${hlsMatch[1]}&${token}` : hlsMatch[1];
+        let voices = ['Рус. Дублированный'];
+        const audioNamesMatch = mkBlock.match(/"names"\s*:\s*(\[[^\]]+\])/);
+        if (audioNamesMatch) {
+          try { voices = JSON.parse(audioNamesMatch[1]); } catch (e) {}
+        }
+
+        return {
+          found: true,
+          isSeries: false,
+          embedUrl: mirror + p,
+          voices,
+          seasons: {
+            1: [
+              {
+                season: 1,
+                episode: 1,
+                title: 'Полный фильм',
+                duration: 130,
+                hlsUrl: signedHls,
+                rawHls: signedHls,
+                voices,
+                subtitles: []
+              }
+            ]
+          }
+        };
+      }
+    } catch (e) {
+      // try next path
+    }
+  }
+  throw new Error('Mirror miss');
+}
+
 // Client-Side Mirror Extractor: runs directly from the user's browser (residential IP + real UA)
-// so cloud hosts (Render, etc.) never fail due to datacenter IP blocks or IP-hash signing mismatches.
+// Racing mirrors concurrently with Promise.any so streams resolve in ~300ms.
 async function parseClientStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
   const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
   const cached = clientStreamCache.get(cacheKey);
@@ -89,107 +193,25 @@ async function parseClientStreamBalancer(imdbId, kpId, preferredMirror = 'direct
   const paths = [];
   if (kpId) paths.push(`/embed/kp/${encodeURIComponent(kpId)}`);
   if (imdbId) paths.push(`/embed/imdb/${encodeURIComponent(imdbId)}`);
+  if (paths.length === 0) return { found: false };
 
-  for (const mirror of mirrors) {
-    for (const p of paths) {
+  try {
+    let result = null;
+    if (preferredMirror !== 'direct') {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 6500);
-        const r = await fetch(mirror + p, {
-          credentials: 'omit',
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-        if (!r.ok) continue;
-
-        const html = await r.text();
-        const mkIdx = html.lastIndexOf('makePlayer({');
-        if (mkIdx === -1) continue;
-
-        const tokenMatch = html.match(/var\s+lok\s*=\s*\d+\s*,\s*\w+\s*=\s*"([^"]+)"/);
-        const token = tokenMatch?.[1] || '';
-        const mkBlock = html.slice(mkIdx);
-
-        // Series / Cartoon / Anime with playlist seasons
-        const sIdx = mkBlock.indexOf('seasons:');
-        if (sIdx !== -1) {
-          const jsonStr = extractJsonArray(mkBlock, sIdx);
-          if (jsonStr) {
-            const rawSeasons = JSON.parse(jsonStr);
-            const seasonsMap = {};
-            const allVoicesSet = new Set();
-
-            for (const sObj of rawSeasons) {
-              const sNum = Number(sObj.season) || 1;
-              seasonsMap[sNum] = [];
-              for (const ep of (sObj.episodes || [])) {
-                const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
-                const epVoices = ep.audio?.names || ['Русский перевод'];
-                epVoices.forEach(v => allVoicesSet.add(v));
-
-                const signedHls = ep.hls ? (token ? `${ep.hls}&${token}` : ep.hls) : '';
-                seasonsMap[sNum].push({
-                  season: sNum,
-                  episode: epNum,
-                  title: ep.title || `Серия ${epNum}`,
-                  duration: Math.round((ep.duration || 2700) / 60),
-                  hlsUrl: signedHls,
-                  rawHls: signedHls,
-                  voices: epVoices,
-                  subtitles: (ep.cc || []).map(c => ({ name: c.name, url: c.url }))
-                });
-              }
-            }
-
-            const result = {
-              found: true,
-              isSeries: true,
-              embedUrl: mirror + p,
-              seasons: seasonsMap,
-              voices: Array.from(allVoicesSet)
-            };
-            clientStreamCache.set(cacheKey, { ts: Date.now(), data: result });
-            return result;
-          }
-        }
-
-        // Single Movie with source.hls
-        const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
-        if (hlsMatch) {
-          const signedHls = token ? `${hlsMatch[1]}&${token}` : hlsMatch[1];
-          let voices = ['Рус. Дублированный'];
-          const audioNamesMatch = mkBlock.match(/"names"\s*:\s*(\[[^\]]+\])/);
-          if (audioNamesMatch) {
-            try { voices = JSON.parse(audioNamesMatch[1]); } catch (e) {}
-          }
-
-          const result = {
-            found: true,
-            isSeries: false,
-            embedUrl: mirror + p,
-            voices,
-            seasons: {
-              1: [
-                {
-                  season: 1,
-                  episode: 1,
-                  title: 'Полный фильм',
-                  duration: 130,
-                  hlsUrl: signedHls,
-                  rawHls: signedHls,
-                  voices,
-                  subtitles: []
-                }
-              ]
-            }
-          };
-          clientStreamCache.set(cacheKey, { ts: Date.now(), data: result });
-          return result;
-        }
+        result = await probeClientMirror(mirrors[0], paths);
       } catch (e) {
-        // try next mirror/path
+        result = await Promise.any(mirrors.slice(1).map(m => probeClientMirror(m, paths)));
       }
+    } else {
+      result = await Promise.any(mirrors.map(m => probeClientMirror(m, paths)));
     }
+    if (result && result.found) {
+      clientStreamCache.set(cacheKey, { ts: Date.now(), data: result });
+      return result;
+    }
+  } catch (e) {
+    // all mirrors failed
   }
 
   return { found: false };
@@ -307,12 +329,14 @@ const favCountBadge = document.getElementById('favCountBadge');
 const historyCountBadge = document.getElementById('historyCountBadge');
 
 const continueWatchingBar = document.getElementById('continueWatchingBar');
-const continueTitle = document.getElementById('continueTitle');
-const continueMeta = document.getElementById('continueMeta');
-const continuePlayBtn = document.getElementById('continuePlayBtn');
+const continueCardsList = document.getElementById('continueCardsList');
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+const resetFiltersBtn = document.getElementById('resetFiltersBtn');
 
 // Modal Elements
 const itemModal = document.getElementById('itemModal');
+const modalWindow = itemModal.querySelector('.modal-window');
+const theaterModeBtn = document.getElementById('theaterModeBtn');
 const closeModalBtn = document.getElementById('closeModalBtn');
 const modalTypeBadge = document.getElementById('modalTypeBadge');
 const modalTitle = document.getElementById('modalTitle');
@@ -346,6 +370,7 @@ const voiceSelector = document.getElementById('voiceSelector');
 const qualitySelector = document.getElementById('qualitySelector');
 
 const seriesPickerBox = document.getElementById('seriesPickerBox');
+const episodesCountBadge = document.getElementById('episodesCountBadge');
 const seasonButtons = document.getElementById('seasonButtons');
 const episodeButtons = document.getElementById('episodeButtons');
 const prevEpBtn = document.getElementById('prevEpBtn');
@@ -355,6 +380,7 @@ const playerOsd = document.getElementById('playerOsd');
 const directPlayerWrap = document.getElementById('directPlayerWrap');
 const html5Video = document.getElementById('html5Video');
 const nowPlayingText = document.getElementById('nowPlayingText');
+const restartVideoBtn = document.getElementById('restartVideoBtn');
 const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
 const pipBtn = document.getElementById('pipBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -390,17 +416,55 @@ const TYPE_LABELS = {
   anime: 'Аниме'
 };
 
+function getProgressPercent(h) {
+  if (!h || !h.currentTime || h.currentTime <= 5) return 0;
+  const total = h.durationSeconds > 60 ? h.durationSeconds : 5400;
+  return Math.min(98, Math.max(4, Math.round((h.currentTime / total) * 100)));
+}
+
 function updateBadges() {
   favCountBadge.textContent = state.favorites.length;
   historyCountBadge.textContent = state.history.length;
 
-  if (state.history.length > 0) {
-    const last = state.history[0];
+  const recent = state.history.slice(0, 5);
+  if (recent.length > 0 && continueCardsList) {
     continueWatchingBar.classList.remove('hidden');
-    continueTitle.textContent = last.title;
-    const isEpisodic = last.type === 'series' || last.type === 'anime' || last.type === 'cartoon';
-    const epPart = isEpisodic ? `Сезон ${last.season || 1}, Серия ${last.episode || 1} • ` : '';
-    continueMeta.textContent = `${epPart}Озвучка: ${last.voice || 'Дубляж'} • ${last.quality || '1080p'}`;
+    continueCardsList.innerHTML = '';
+
+    for (const h of recent) {
+      const isEpisodic = h.type === 'series' || h.type === 'anime' || h.type === 'cartoon';
+      const epPart = isEpisodic ? `С${h.season || 1}·С${h.episode || 1} • ` : '';
+      const pct = getProgressPercent(h) || 4;
+
+      const card = document.createElement('div');
+      card.className = 'continue-card focusable';
+      card.tabIndex = 0;
+      card.innerHTML = `
+        <img
+          src="${h.poster}"
+          alt="${h.title}"
+          class="continue-card-thumb"
+          loading="lazy"
+          decoding="async"
+          onerror="this.src='https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=300&q=70'"
+        />
+        <div class="continue-card-body">
+          <div class="continue-card-title" title="${h.title}">${h.title}</div>
+          <div class="continue-card-meta">${epPart}${h.voice || 'Дубляж'}</div>
+          <div class="continue-card-progress">
+            <div class="continue-card-progress-fill" style="width:${pct}%"></div>
+          </div>
+        </div>
+        <button type="button" class="continue-card-remove" title="Убрать из истории" aria-label="Убрать из истории">×</button>
+      `;
+
+      card.addEventListener('click', () => openItemModal(h, 'player'));
+      card.querySelector('.continue-card-remove').addEventListener('click', e => {
+        e.stopPropagation();
+        removeFromHistory(h.imdbId);
+      });
+      continueCardsList.appendChild(card);
+    }
   } else {
     continueWatchingBar.classList.add('hidden');
   }
@@ -411,7 +475,25 @@ function saveFavorites() {
   updateBadges();
 }
 
-function addToHistory(item, season, episode, voice, quality, currentTime = 0) {
+function toggleFavorite(item) {
+  if (!item) return false;
+  const idx = state.favorites.findIndex(f => f.imdbId === item.imdbId);
+  const added = idx < 0;
+  if (idx >= 0) {
+    state.favorites.splice(idx, 1);
+  } else {
+    state.favorites.unshift(item);
+  }
+  saveFavorites();
+  return added;
+}
+
+function addToHistory(item, season, episode, voice, quality, currentTime = 0, durationSeconds = 0) {
+  const prev = state.history.find(x => x.imdbId === item.imdbId);
+  const resolvedDuration = durationSeconds > 60
+    ? Math.floor(durationSeconds)
+    : (prev?.durationSeconds || (item.type === 'movie' ? 7200 : 3000));
+
   const entry = {
     id: item.id,
     imdbId: item.imdbId,
@@ -433,12 +515,46 @@ function addToHistory(item, season, episode, voice, quality, currentTime = 0) {
     voice,
     quality,
     currentTime: Math.floor(currentTime || 0),
+    durationSeconds: resolvedDuration,
     updatedAt: Date.now()
   };
 
   state.history = [entry, ...state.history.filter(x => x.imdbId !== item.imdbId)].slice(0, 40);
   localStorage.setItem('spbguka_history', JSON.stringify(state.history));
   updateBadges();
+}
+
+function saveLivePlaybackProgress() {
+  if (!state.currentItem || !html5Video || itemModal.classList.contains('hidden')) return;
+  const t = Math.floor(html5Video.currentTime || 0);
+  const dur = Math.floor(html5Video.duration || 0);
+  if (t <= 0) return;
+  const idx = state.history.findIndex(x => x.imdbId === state.currentItem.imdbId);
+  if (idx >= 0) {
+    state.history[idx].currentTime = t;
+    if (dur > 60) state.history[idx].durationSeconds = dur;
+    state.history[idx].updatedAt = Date.now();
+    localStorage.setItem('spbguka_history', JSON.stringify(state.history));
+  }
+}
+
+function removeFromHistory(imdbId) {
+  state.history = state.history.filter(x => x.imdbId !== imdbId);
+  localStorage.setItem('spbguka_history', JSON.stringify(state.history));
+  updateBadges();
+  if (state.category === 'history') loadCatalog();
+}
+
+function clearHistory() {
+  state.history = [];
+  localStorage.setItem('spbguka_history', '[]');
+  updateBadges();
+  if (state.category === 'history') loadCatalog();
+}
+
+function updateResetFiltersButton() {
+  const dirty = state.genre !== 'all' || state.year !== 'all' || state.sort !== 'popular' || state.searchQuery.trim() !== '';
+  if (resetFiltersBtn) resetFiltersBtn.classList.toggle('hidden', !dirty);
 }
 
 function syncCategoryButtons(category) {
@@ -473,45 +589,82 @@ function renderHeroBanner(items) {
   heroSynopsis.textContent = featured.description || '';
 }
 
+function getFilteredLocalCatalog() {
+  let list = [...(state.masterCatalog || [])];
+
+  if (state.category === 'new') list = list.filter(x => x.isNew || x.year >= 2023);
+  else if (state.category === 'popular') list = list.filter(x => x.isPopular);
+  else if (state.category === 'movie') list = list.filter(x => x.type === 'movie');
+  else if (state.category === 'series') list = list.filter(x => x.type === 'series');
+  else if (state.category === 'cartoon') list = list.filter(x => x.type === 'cartoon');
+  else if (state.category === 'anime') list = list.filter(x => x.type === 'anime');
+
+  if (state.genre !== 'all') {
+    const gLower = state.genre.toLowerCase();
+    list = list.filter(x => (x.genres || []).some(g => g.toLowerCase() === gLower));
+  }
+
+  if (state.year === '2024-2026') list = list.filter(x => x.year >= 2024);
+  else if (state.year === '2020-2023') list = list.filter(x => x.year >= 2020 && x.year <= 2023);
+  else if (state.year === '2010-2019') list = list.filter(x => x.year >= 2010 && x.year <= 2019);
+  else if (state.year === 'old') list = list.filter(x => x.year < 2010);
+
+  if (state.sort === 'rating') {
+    list.sort((a, b) => ((b.ratingKp || 0) + (b.ratingImdb || 0)) - ((a.ratingKp || 0) + (a.ratingImdb || 0)));
+  } else if (state.sort === 'year') {
+    list.sort((a, b) => (b.year || 0) - (a.year || 0));
+  } else if (state.sort === 'title') {
+    list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'ru'));
+  }
+
+  return list;
+}
+
 async function loadCatalog() {
-  loadingState.classList.remove('hidden');
+  updateResetFiltersButton();
   emptyState.classList.add('hidden');
-  catalogGrid.innerHTML = '';
 
   if (state.searchQuery.trim()) {
+    const mySearchToken = ++searchReqToken;
+    loadingState.classList.remove('hidden');
+    catalogGrid.innerHTML = '';
     sectionTitle.textContent = `Поиск: «${state.searchQuery}»`;
     sectionSubtitle.textContent = 'Результаты из IMDb, Wikidata RU и подключённых видео-балансеров';
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(state.searchQuery)}`);
       const data = await res.json();
+      if (mySearchToken !== searchReqToken) return;
       state.catalogItems = data.items || [];
     } catch (e) {
+      if (mySearchToken !== searchReqToken) return;
       state.catalogItems = [];
     }
   } else if (state.category === 'favorites') {
+    searchReqToken++;
     sectionTitle.textContent = CATEGORY_TITLES.favorites;
     sectionSubtitle.textContent = 'Сохранённые фильмы и сериалы';
     state.catalogItems = [...state.favorites];
   } else if (state.category === 'history') {
+    searchReqToken++;
     sectionTitle.textContent = CATEGORY_TITLES.history;
     sectionSubtitle.textContent = 'Недавно открытые фильмы и серии';
     state.catalogItems = [...state.history];
   } else {
+    searchReqToken++;
     sectionTitle.textContent = CATEGORY_TITLES[state.category] || CATEGORY_TITLES.all;
     sectionSubtitle.textContent = 'Прямые HLS-потоки • Выбор озвучки без рекламы';
-    try {
-      const params = new URLSearchParams({
-        category: state.category,
-        genre: state.genre,
-        year: state.year,
-        sort: state.sort
-      });
-      const res = await fetch(`/api/catalog?${params.toString()}`);
-      const data = await res.json();
-      state.catalogItems = data.items || [];
-    } catch (e) {
-      state.catalogItems = [];
+    if (!state.masterCatalog) {
+      loadingState.classList.remove('hidden');
+      catalogGrid.innerHTML = '';
+      try {
+        const res = await fetch('/api/catalog?category=all&sort=popular');
+        const data = await res.json();
+        state.masterCatalog = data.items || [];
+      } catch (e) {
+        state.masterCatalog = [];
+      }
     }
+    state.catalogItems = getFilteredLocalCatalog();
   }
 
   loadingState.classList.add('hidden');
@@ -529,13 +682,18 @@ function renderCatalogGrid(items) {
   }
   emptyState.classList.add('hidden');
 
+  const favIds = new Set(state.favorites.map(f => f.imdbId));
+  const historyMap = new Map(state.history.map(h => [h.imdbId, h]));
+
   for (const item of items) {
     const card = document.createElement('article');
     card.className = 'movie-card focusable';
     card.tabIndex = 0;
     const typeLabel = TYPE_LABELS[item.type] || 'Кино';
     const voicesList = item.voices || ['Рус. Дублированный', 'HDrezka Studio', 'Red Head Sound'];
-    const historyMatch = state.history.find(h => h.imdbId === item.imdbId);
+    const historyMatch = historyMap.get(item.imdbId);
+    const isFav = favIds.has(item.imdbId);
+    const progressPct = getProgressPercent(historyMatch);
 
     card.innerHTML = `
       <div class="card-poster-wrap">
@@ -544,6 +702,7 @@ function renderCatalogGrid(items) {
           alt="${item.title}"
           class="card-poster"
           loading="lazy"
+          decoding="async"
           onerror="this.src='https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80'"
         />
         <div class="card-badges-top">
@@ -553,6 +712,11 @@ function renderCatalogGrid(items) {
             ${item.ratingImdb ? `<span class="r-badge imdb">${item.ratingImdb}</span>` : ''}
           </div>
         </div>
+        <button type="button" class="card-fav-btn ${isFav ? 'is-fav' : ''}" title="${isFav ? 'Убрать из избранного' : 'В избранное'}" aria-label="В избранное">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </button>
         <div class="card-play-hover">
           <div class="play-circle">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -560,6 +724,9 @@ function renderCatalogGrid(items) {
             </svg>
           </div>
         </div>
+        ${progressPct > 0
+          ? `<div class="card-progress-bar"><div class="card-progress-fill" style="width:${progressPct}%"></div></div>`
+          : ''}
       </div>
       <div class="card-body">
         <h3 class="card-title" title="${item.title}">${item.title}</h3>
@@ -571,6 +738,15 @@ function renderCatalogGrid(items) {
         </div>
       </div>
     `;
+
+    const favBtn = card.querySelector('.card-fav-btn');
+    favBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const added = toggleFavorite(item);
+      favBtn.classList.toggle('is-fav', added);
+      favBtn.title = added ? 'Убрать из избранного' : 'В избранное';
+      if (state.category === 'favorites') loadCatalog();
+    });
 
     card.addEventListener('click', () => openItemModal(item, 'player'));
     catalogGrid.appendChild(card);
@@ -585,42 +761,58 @@ function getActiveEpisodeObj(item) {
 
 async function openItemModal(itemSummary, initialTab = 'player') {
   const myOpenToken = ++modalOpenToken;
+  filesTabDirty = true;
+  state.currentItem = {
+    ...itemSummary,
+    qualities: itemSummary.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
+    providers: itemSummary.providers || [
+      { id: 'direct', name: 'СПБГУКА Direct HLS (Чистый поток • 0% рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' }
+    ]
+  };
+
   itemModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   clearTvFocus();
 
   const savedHistory = state.history.find(h => h.imdbId === itemSummary.imdbId);
+  state.selectedSeason = savedHistory?.season || 1;
+  state.selectedEpisode = savedHistory?.episode || 1;
+  state.selectedVoice = savedHistory?.voice || (itemSummary.voices && itemSummary.voices[0]) || 'Рус. Дублированный';
+  state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
 
-  modalTitle.textContent = itemSummary.title;
-  modalOrigTitle.textContent = `${itemSummary.originalTitle || ''} (${itemSummary.yearRange || itemSummary.year || ''})`;
-  modalTypeBadge.textContent = TYPE_LABELS[itemSummary.type] || 'Кино';
+  // Immediately render card metadata so modal opens in 0ms
+  populateInfoTab(state.currentItem);
+  updateFavButtonState();
+  updateBalancerButtons();
+  switchModalTab(initialTab);
   nowPlayingText.textContent = `Подключение потока: ${itemSummary.title}...`;
 
-  let detailed = null;
-  try {
-    const res = await fetch(`/api/details?imdb=${encodeURIComponent(itemSummary.imdbId)}&title=${encodeURIComponent(itemSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}`);
-    detailed = await res.json();
-  } catch (e) {
-    detailed = {
-      ...itemSummary,
-      seasons: { 1: [{ season: 1, episode: 1, title: 'Основной поток', hlsUrl: '', voices: itemSummary.voices || ['Рус. Дублированный'] }] },
-      qualities: ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
-      providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
-    };
+  const fallbackDetailed = {
+    ...itemSummary,
+    seasons: { 1: [{ season: 1, episode: 1, title: 'Основной поток', hlsUrl: '', voices: itemSummary.voices || ['Рус. Дублированный'] }] },
+    qualities: ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
+    providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
+  };
+
+  // Run fast server metadata lookup (?fast=1) and parallel client mirror extraction simultaneously
+  const [detailedRes, initialClientData] = await Promise.all([
+    fetch(`/api/details?imdb=${encodeURIComponent(itemSummary.imdbId)}&title=${encodeURIComponent(itemSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`)
+      .then(r => r.json())
+      .catch(() => fallbackDetailed),
+    parseClientStreamBalancer(itemSummary.imdbId, itemSummary.kpId, state.selectedBalancer)
+  ]);
+
+  if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+
+  const detailed = detailedRes || fallbackDetailed;
+  let clientData = initialClientData;
+
+  if ((!clientData || !clientData.found) && !itemSummary.kpId && detailed.kpId) {
+    clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, state.selectedBalancer);
+    if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
   }
 
-  if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
-
-  // Always run client-side mirror extraction from the user's browser so cloud deployments (Render, etc.)
-  // get full seasons, episodes, voices, and IP-matched rawHls URLs even when server IPs are blocked.
-  const clientData = await parseClientStreamBalancer(
-    detailed.imdbId || itemSummary.imdbId,
-    detailed.kpId || itemSummary.kpId,
-    state.selectedBalancer
-  );
-  if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
-
-  if (clientData.found) {
+  if (clientData && clientData.found) {
     detailed.hasDirectHls = true;
     detailed.seasons = clientData.seasons;
     if (clientData.voices && clientData.voices.length > 0) {
@@ -654,10 +846,13 @@ async function openItemModal(itemSummary, initialTab = 'player') {
 
   populateInfoTab(item);
   populatePlayerControls(item);
-  populateFilesTab(item);
+  filesTabDirty = true;
+  if (state.activeTab === 'files') {
+    populateFilesTab(item);
+    filesTabDirty = false;
+  }
   updateFavButtonState();
   updateBalancerButtons();
-  switchModalTab(initialTab);
   startPlayback(savedHistory?.currentTime || 0, true);
 }
 
@@ -743,6 +938,14 @@ function switchQualityLevel(qualityLabel) {
   }
 }
 
+function markFilesTabDirtyOrRefresh(item) {
+  filesTabDirty = true;
+  if (state.activeTab === 'files' && item) {
+    populateFilesTab(item);
+    filesTabDirty = false;
+  }
+}
+
 function populatePlayerControls(item) {
   const activeEp = getActiveEpisodeObj(item);
   const voices = (activeEp?.voices && activeEp.voices.length)
@@ -804,7 +1007,7 @@ function populatePlayerControls(item) {
         const firstEp = seasonsObj[sNum]?.[0]?.episode || 1;
         state.selectedEpisode = firstEp;
         populatePlayerControls(item);
-        populateFilesTab(item);
+        markFilesTabDirtyOrRefresh(item);
         startPlayback(0, true);
         showPlayerOsd(`Сезон ${sNum}, Серия ${firstEp}`);
       });
@@ -813,6 +1016,16 @@ function populatePlayerControls(item) {
 
     episodeButtons.innerHTML = '';
     const eps = seasonsObj[state.selectedSeason] || [];
+    if (episodesCountBadge) {
+      const count = eps.length;
+      const mod10 = count % 10;
+      const mod100 = count % 100;
+      const word = (mod10 === 1 && mod100 !== 11)
+        ? 'серия'
+        : (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'серии' : 'серий');
+      episodesCountBadge.textContent = count > 0 ? `${count} ${word}` : '';
+    }
+
     for (const ep of eps) {
       const epBtn = document.createElement('button');
       epBtn.className = `ep-btn focusable ${Number(state.selectedEpisode) === Number(ep.episode) ? 'active' : ''}`;
@@ -824,13 +1037,22 @@ function populatePlayerControls(item) {
       epBtn.addEventListener('click', () => {
         state.selectedEpisode = ep.episode;
         populatePlayerControls(item);
-        populateFilesTab(item);
+        markFilesTabDirtyOrRefresh(item);
         startPlayback(0, true);
         showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${ep.episode}`);
       });
       episodeButtons.appendChild(epBtn);
     }
+
+    requestAnimationFrame(() => {
+      episodeButtons.querySelector('.ep-btn.active')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'center'
+      });
+    });
   } else {
+    if (episodesCountBadge) episodesCountBadge.textContent = '';
     seriesPickerBox.classList.add('hidden');
   }
 }
@@ -1017,7 +1239,10 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
       hlsInstance = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
-        backBufferLength: 60
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        backBufferLength: 30,
+        capLevelToPlayerSize: true
       });
 
       hlsInstance.loadSource(manifestUrl);
@@ -1111,9 +1336,14 @@ function switchModalTab(tabName) {
   document.getElementById('tabInfo').classList.toggle('hidden', tabName !== 'info');
   document.getElementById('tabPlayer').classList.toggle('hidden', tabName !== 'player');
   document.getElementById('tabFiles').classList.toggle('hidden', tabName !== 'files');
+  if (tabName === 'files' && state.currentItem && filesTabDirty) {
+    populateFilesTab(state.currentItem);
+    filesTabDirty = false;
+  }
 }
 
 function closeItemModal() {
+  saveLivePlaybackProgress();
   modalOpenToken++;
   playbackRequestToken++;
   destroyHls();
@@ -1121,7 +1351,10 @@ function closeItemModal() {
   balancerIframe.removeAttribute('srcdoc');
   balancerIframe.src = 'about:blank';
   itemModal.classList.add('hidden');
+  if (modalWindow) modalWindow.classList.remove('theater-mode');
+  if (theaterModeBtn) theaterModeBtn.textContent = 'Широкий экран';
   document.body.style.overflow = '';
+  updateBadges();
   clearTvFocus();
 }
 
@@ -1264,24 +1497,68 @@ document.getElementById('sortFilter').addEventListener('change', e => {
   loadCatalog();
 });
 
+function resetAllFilters() {
+  clearTimeout(searchDebounceTimer);
+  state.category = 'all';
+  state.genre = 'all';
+  if ('year' in state) state.year = 'all';
+  if ('sort' in state) state.sort = 'popular';
+  state.searchQuery = '';
+  searchInput.value = '';
+  clearSearchBtn.classList.add('hidden');
+  ['genreFilter', 'yearFilter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = 'all';
+  });
+  const sortEl = document.getElementById('sortFilter') || document.getElementById('sortSelect');
+  if (sortEl) sortEl.value = 'popular';
+  if (typeof syncCategoryButtons === 'function') syncCategoryButtons('all');
+  if (typeof updateResetFiltersButton === 'function') updateResetFiltersButton();
+  loadCatalog();
+}
+
 searchForm.addEventListener('submit', e => {
   e.preventDefault();
+  clearTimeout(searchDebounceTimer);
   state.searchQuery = searchInput.value.trim();
   clearSearchBtn.classList.toggle('hidden', !state.searchQuery);
+  if (typeof updateResetFiltersButton === 'function') updateResetFiltersButton();
   loadCatalog();
   searchInput.blur();
 });
 
 searchInput.addEventListener('input', () => {
+  const val = searchInput.value.trim();
   clearSearchBtn.classList.toggle('hidden', !searchInput.value);
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    if (state.searchQuery !== val) {
+      state.searchQuery = val;
+      if (typeof updateResetFiltersButton === 'function') updateResetFiltersButton();
+      loadCatalog();
+    }
+  }, 350);
 });
 
 clearSearchBtn.addEventListener('click', () => {
+  clearTimeout(searchDebounceTimer);
   searchInput.value = '';
   state.searchQuery = '';
   clearSearchBtn.classList.add('hidden');
+  if (typeof updateResetFiltersButton === 'function') updateResetFiltersButton();
   loadCatalog();
 });
+
+if (resetFiltersBtn) {
+  resetFiltersBtn.addEventListener('click', resetAllFilters);
+}
+
+if (clearHistoryBtn) {
+  clearHistoryBtn.addEventListener('click', () => {
+    clearHistory();
+    renderCatalogGrid();
+  });
+}
 
 document.getElementById('sidebarToggle').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('collapsed');
@@ -1289,13 +1566,7 @@ document.getElementById('sidebarToggle').addEventListener('click', () => {
 
 document.getElementById('brandLogo').addEventListener('click', e => {
   e.preventDefault();
-  state.category = 'all';
-  state.genre = 'all';
-  state.searchQuery = '';
-  searchInput.value = '';
-  clearSearchBtn.classList.add('hidden');
-  syncCategoryButtons('all');
-  loadCatalog();
+  resetAllFilters();
 });
 
 heroWatchBtn.addEventListener('click', () => {
@@ -1306,12 +1577,6 @@ heroInfoBtn.addEventListener('click', () => {
   if (state.featuredItem) openItemModal(state.featuredItem, 'info');
 });
 
-continuePlayBtn.addEventListener('click', () => {
-  if (state.history.length > 0) {
-    openItemModal(state.history[0], 'player');
-  }
-});
-
 // Modal Tabs & Controls
 document.querySelectorAll('.hdvb-tab').forEach(tab => {
   tab.addEventListener('click', () => switchModalTab(tab.dataset.tab));
@@ -1320,21 +1585,30 @@ document.querySelectorAll('.hdvb-tab').forEach(tab => {
 switchToPlayerBtn.addEventListener('click', () => switchModalTab('player'));
 closeModalBtn.addEventListener('click', closeItemModal);
 
+if (theaterModeBtn && modalWindow) {
+  theaterModeBtn.addEventListener('click', () => {
+    const isWide = modalWindow.classList.toggle('theater-mode');
+    theaterModeBtn.textContent = isWide ? 'Обычный вид' : 'Широкий экран';
+  });
+}
+
+if (restartVideoBtn) {
+  restartVideoBtn.addEventListener('click', () => {
+    html5Video.currentTime = 0;
+    html5Video.play().catch(() => {});
+    saveLivePlaybackProgress();
+    showPlayerOsd('С начала (0:00)');
+  });
+}
+
 itemModal.addEventListener('click', e => {
   if (e.target === itemModal) closeItemModal();
 });
 
 modalFavBtn.addEventListener('click', () => {
   if (!state.currentItem) return;
-  const idx = state.favorites.findIndex(f => f.imdbId === state.currentItem.imdbId);
-  if (idx >= 0) {
-    state.favorites.splice(idx, 1);
-  } else {
-    state.favorites.unshift(state.currentItem);
-  }
-  saveFavorites();
+  toggleFavorite(state.currentItem);
   updateFavButtonState();
-  if (state.category === 'favorites') loadCatalog();
 });
 
 balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
@@ -1376,7 +1650,7 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
       }
 
       populatePlayerControls(state.currentItem);
-      populateFilesTab(state.currentItem);
+      markFilesTabDirtyOrRefresh(state.currentItem);
       startPlayback(resumeAt, true);
       showPlayerOsd(`Источник: ${btn.textContent}`);
     } else {
@@ -1391,31 +1665,22 @@ sandboxToggle.addEventListener('change', () => {
   if (!isDirectHlsBalancer(state.selectedBalancer)) startPlayback(0, true);
 });
 
-prevEpBtn.addEventListener('click', () => {
+function switchEpisodeStep(delta, osdPrefix = '') {
   if (!state.currentItem) return;
   const eps = (state.currentItem.seasons && state.currentItem.seasons[state.selectedSeason]) || [];
   const curIdx = eps.findIndex(e => Number(e.episode) === Number(state.selectedEpisode));
-  if (curIdx > 0) {
-    state.selectedEpisode = eps[curIdx - 1].episode;
-    populatePlayerControls(state.currentItem);
-    populateFilesTab(state.currentItem);
-    startPlayback(0, true);
-    showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
-  }
-});
+  const nextIdx = curIdx + delta;
+  if (curIdx < 0 || nextIdx < 0 || nextIdx >= eps.length) return;
+  state.selectedEpisode = eps[nextIdx].episode;
+  populatePlayerControls(state.currentItem);
+  markFilesTabDirtyOrRefresh(state.currentItem);
+  startPlayback(0, true);
+  const label = `Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`;
+  showPlayerOsd(osdPrefix ? `${osdPrefix}: ${label}` : label);
+}
 
-nextEpBtn.addEventListener('click', () => {
-  if (!state.currentItem) return;
-  const eps = (state.currentItem.seasons && state.currentItem.seasons[state.selectedSeason]) || [];
-  const curIdx = eps.findIndex(e => Number(e.episode) === Number(state.selectedEpisode));
-  if (curIdx >= 0 && curIdx < eps.length - 1) {
-    state.selectedEpisode = eps[curIdx + 1].episode;
-    populatePlayerControls(state.currentItem);
-    populateFilesTab(state.currentItem);
-    startPlayback(0, true);
-    showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
-  }
-});
+prevEpBtn.addEventListener('click', () => switchEpisodeStep(-1));
+nextEpBtn.addEventListener('click', () => switchEpisodeStep(1));
 
 playbackSpeedSelect.addEventListener('change', e => {
   html5Video.playbackRate = parseFloat(e.target.value);
@@ -1434,21 +1699,28 @@ pipBtn.addEventListener('click', async () => {
 
 fullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
-html5Video.addEventListener('ended', () => {
-  if (!state.currentItem) return;
-  const eps = (state.currentItem.seasons && state.currentItem.seasons[state.selectedSeason]) || [];
-  const curIdx = eps.findIndex(e => Number(e.episode) === Number(state.selectedEpisode));
-  if (curIdx >= 0 && curIdx < eps.length - 1) {
-    state.selectedEpisode = eps[curIdx + 1].episode;
-    populatePlayerControls(state.currentItem);
-    populateFilesTab(state.currentItem);
-    startPlayback(0, true);
-    showPlayerOsd(`Автопереход: Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
+html5Video.addEventListener('timeupdate', () => {
+  const now = Date.now();
+  if (now - lastHistorySaveTs >= 5000) {
+    lastHistorySaveTs = now;
+    saveLivePlaybackProgress();
   }
 });
 
+html5Video.addEventListener('pause', () => {
+  saveLivePlaybackProgress();
+});
+
+html5Video.addEventListener('ended', () => {
+  saveLivePlaybackProgress();
+  switchEpisodeStep(1, 'Автопереход');
+});
+
 refreshParsersBtn.addEventListener('click', () => {
-  if (state.currentItem) populateFilesTab(state.currentItem);
+  if (state.currentItem) {
+    populateFilesTab(state.currentItem);
+    filesTabDirty = false;
+  }
 });
 
 parsersStatusBtn.addEventListener('click', () => parsersModal.classList.remove('hidden'));

@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=4" />
+  <link rel="stylesheet" href="/styles.css?v=5" />
 </head>
 <body>
   <!-- Top Header -->
@@ -203,23 +203,16 @@
         </div>
       </section>
 
-      <!-- Continue Watching Strip -->
-      <section id="continueWatchingBar" class="continue-strip hidden">
-        <div class="continue-left">
-          <div class="continue-icon">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 4l15 8-15 8z"/>
-            </svg>
+      <!-- Continue Watching Shelf -->
+      <section id="continueWatchingBar" class="continue-shelf hidden">
+        <div class="continue-shelf-head">
+          <div class="continue-shelf-title">
+            <span class="continue-dot"></span>
+            <h2>Продолжить просмотр</h2>
           </div>
-          <div class="continue-text">
-            <span class="continue-eyebrow">Продолжить просмотр</span>
-            <div class="continue-title-line">
-              <strong id="continueTitle">—</strong>
-              <span id="continueMeta" class="continue-meta"></span>
-            </div>
-          </div>
+          <button id="clearHistoryBtn" class="btn-ghost btn-xs focusable" type="button">Очистить</button>
         </div>
-        <button id="continuePlayBtn" class="btn-primary btn-sm focusable" type="button">Воспроизвести</button>
+        <div id="continueCardsList" class="continue-cards-list"></div>
       </section>
 
       <!-- Filter Strip -->
@@ -253,6 +246,8 @@
             <option value="year">Сначала новые</option>
             <option value="title">По алфавиту</option>
           </select>
+
+          <button id="resetFiltersBtn" class="btn-ghost btn-sm hidden focusable" type="button">Сбросить фильтры</button>
         </div>
       </section>
 
@@ -344,6 +339,7 @@
         </div>
 
         <div class="modal-header-actions">
+          <button id="theaterModeBtn" class="btn-ghost btn-sm focusable" type="button" title="Широкий экран">Широкий экран</button>
           <button id="modalFavBtn" class="btn-ghost btn-sm focusable" type="button">В избранное</button>
           <button id="closeModalBtn" class="modal-close-btn focusable" type="button" aria-label="Закрыть">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
@@ -377,6 +373,7 @@
                   <span id="nowPlayingText">Подключение потока...</span>
                 </div>
                 <div class="player-tools">
+                  <button id="restartVideoBtn" class="btn-ghost btn-xs focusable" type="button" title="Смотреть с начала">С начала</button>
                   <label class="speed-control">
                     <span>Скорость</span>
                     <select id="playbackSpeedSelect" class="speed-select focusable">
@@ -410,6 +407,7 @@
             <div id="seriesPickerBox" class="deck-section hidden">
               <div class="deck-head">
                 <span class="deck-label">Сезоны и серии</span>
+                <span id="episodesCountBadge" class="ep-count-badge"></span>
                 <div class="season-buttons" id="seasonButtons"></div>
                 <div class="ep-nav-controls">
                   <button id="prevEpBtn" class="btn-ghost btn-xs focusable" type="button">Предыдущая</button>
@@ -577,6 +575,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=4"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

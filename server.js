@@ -2,6 +2,7 @@ import http from 'node:http';
 import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -584,6 +585,8 @@ const SEED_CATALOG = [
 
 const searchCache = new Map();
 const streamCache = new Map();
+const wikiCache = new Map();
+const detailsCache = new Map();
 
 function getMirrorList(preferredMirror = 'direct') {
   if (preferredMirror === 'kinogram') {
@@ -610,12 +613,33 @@ function getMirrorList(preferredMirror = 'direct') {
   ];
 }
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, req = null) {
+  const jsonBuf = Buffer.from(JSON.stringify(data), 'utf8');
+  const acceptEnc = (req?.headers?.['accept-encoding'] || res.req?.headers?.['accept-encoding'] || '').toLowerCase();
+  if (acceptEnc.includes('gzip') && jsonBuf.length > 256) {
+    zlib.gzip(jsonBuf, (err, gzBuf) => {
+      if (err) {
+        res.writeHead(status, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*'
+        });
+        return res.end(jsonBuf);
+      }
+      res.writeHead(status, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Encoding': 'gzip',
+        'Vary': 'Accept-Encoding',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(gzBuf);
+    });
+    return;
+  }
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*'
   });
-  res.end(JSON.stringify(data));
+  res.end(jsonBuf);
 }
 
 function extractJsonArray(str, startIdx) {
@@ -910,7 +934,15 @@ async function handleSearch(query) {
   return merged;
 }
 
-async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') {
+async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct', fastMode = false) {
+  if (fastMode) {
+    const fastCacheKey = `${imdbId}:fast`;
+    const cachedDetails = detailsCache.get(fastCacheKey);
+    if (cachedDetails && (Date.now() - cachedDetails.ts) < 30 * 60 * 1000) {
+      return cachedDetails.data;
+    }
+  }
+
   let baseItem = SEED_CATALOG.find(x => x.imdbId === imdbId);
   if (!baseItem) {
     for (const list of searchCache.values()) {
@@ -951,7 +983,7 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') 
     baseItem = enriched[0];
   }
 
-  // Run Russian Wikipedia summary lookup and Live Balancer HLS extraction in parallel!
+  // Run Russian Wikipedia summary lookup (with 6h cache) and optional Live Balancer HLS extraction in parallel
   const [wikiExtract, liveStreamData] = await Promise.all([
     (async () => {
       try {
@@ -962,8 +994,14 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') 
           wikiPageTitle = baseItem.title;
         }
         if (!wikiPageTitle) return '';
+
+        const cachedWiki = wikiCache.get(wikiPageTitle);
+        if (cachedWiki && (Date.now() - cachedWiki.ts) < 6 * 60 * 60 * 1000) {
+          return cachedWiki.extract;
+        }
+
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3000);
+        const timeout = setTimeout(() => controller.abort(), 2000);
         const wikiRes = await fetch(
           `https://ru.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(wikiPageTitle)}`,
           { signal: controller.signal }
@@ -971,12 +1009,18 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') 
         clearTimeout(timeout);
         if (wikiRes.ok) {
           const wikiData = await wikiRes.json();
-          if (wikiData.extract && wikiData.extract.length > 60) return wikiData.extract;
+          if (wikiData.extract && wikiData.extract.length > 60) {
+            wikiCache.set(wikiPageTitle, { ts: Date.now(), extract: wikiData.extract });
+            return wikiData.extract;
+          }
         }
+        wikiCache.set(wikiPageTitle, { ts: Date.now(), extract: '' });
       } catch (e) {}
       return '';
     })(),
-    parseLiveStreamBalancer(baseItem.imdbId, baseItem.kpId, preferredMirror)
+    fastMode
+      ? Promise.resolve({ found: false })
+      : parseLiveStreamBalancer(baseItem.imdbId, baseItem.kpId, preferredMirror)
   ]);
 
   if (wikiExtract) {
@@ -994,7 +1038,7 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') 
     }
     baseItem.embedUrl = liveStreamData.embedUrl;
   } else {
-    // Fallback if title isn't in Collaps/Namy DB
+    // Minimal skeleton when server fast mode is enabled or stream will be resolved client-side
     seasonsMap = {
       1: [
         {
@@ -1018,13 +1062,19 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct') 
 
   const qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
 
-  return {
+  const detailsPayload = {
     ...baseItem,
     hasDirectHls: liveStreamData.found,
     seasons: seasonsMap,
     providers,
     qualities
   };
+
+  if (fastMode) {
+    detailsCache.set(`${imdbId}:fast`, { ts: Date.now(), data: detailsPayload });
+  }
+
+  return detailsPayload;
 }
 
 // HLS Stream Proxy: Fetches master.m3u8, audio/video sub-playlists, and .ts/.vtt segments with matching UA & Origin
@@ -1288,11 +1338,12 @@ const server = http.createServer(async (req, res) => {
     const imdb = parsedUrl.searchParams.get('imdb') || 'tt0903747';
     const title = parsedUrl.searchParams.get('title') || '';
     const mirror = parsedUrl.searchParams.get('mirror') || 'direct';
-    const details = await handleDetails(imdb, title, mirror);
-    return sendJson(res, 200, details);
+    const fast = parsedUrl.searchParams.get('fast') === '1';
+    const details = await handleDetails(imdb, title, mirror, fast);
+    return sendJson(res, 200, details, req);
   }
 
-  // Static files from ./public
+  // Static files from ./public (with Gzip compression for text assets)
   let safePath = pathname === '/' ? '/index.html' : pathname;
   const filePath = path.join(__dirname, 'public', safePath);
   if (!filePath.startsWith(path.join(__dirname, 'public'))) {
@@ -1306,8 +1357,32 @@ const server = http.createServer(async (req, res) => {
       return res.end('Not found');
     }
     const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const compressible = ['.html', '.css', '.js', '.json', '.svg'].includes(ext);
+    const acceptEnc = (req.headers['accept-encoding'] || '').toLowerCase();
+
+    if (compressible && acceptEnc.includes('gzip') && content.length > 256) {
+      zlib.gzip(content, (gzErr, gzBuf) => {
+        if (gzErr) {
+          res.writeHead(200, {
+            'Content-Type': contentType,
+            'Cache-Control': 'no-store, no-cache, must-revalidate'
+          });
+          return res.end(content);
+        }
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Encoding': 'gzip',
+          'Vary': 'Accept-Encoding',
+          'Cache-Control': 'no-store, no-cache, must-revalidate'
+        });
+        res.end(gzBuf);
+      });
+      return;
+    }
+
     res.writeHead(200, {
-      'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+      'Content-Type': contentType,
       'Cache-Control': 'no-store, no-cache, must-revalidate'
     });
     res.end(content);
