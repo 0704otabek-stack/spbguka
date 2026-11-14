@@ -8,6 +8,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 3456;
 
+process.on('uncaughtException', err => {
+  console.error('Ignored uncaught exception:', err.message);
+});
+process.on('unhandledRejection', err => {
+  console.error('Ignored unhandled rejection:', err?.message || err);
+});
+
 // Must use identical User-Agent across embed lookup and HLS segment proxy because upstream signs URLs with UA hash (hu=...)
 const UPSTREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 const UPSTREAM_ORIGIN = 'https://api.namy.ws';
@@ -1069,7 +1076,14 @@ async function handleHlsProxy(req, res, targetUrl) {
 
     res.writeHead(r.status, resHeaders);
     if (r.body) {
-      Readable.fromWeb(r.body).pipe(res);
+      const nodeStream = Readable.fromWeb(r.body);
+      nodeStream.on('error', () => {
+        if (!res.destroyed) res.end();
+      });
+      res.on('close', () => {
+        nodeStream.destroy();
+      });
+      nodeStream.pipe(res);
     } else {
       const buf = Buffer.from(await r.arrayBuffer());
       res.end(buf);
