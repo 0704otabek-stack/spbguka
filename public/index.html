@@ -2,11 +2,17 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>СПБГУКА — HD VideoBox Web (Любые фильмы и сериалы в любой озвучке без рекламы)</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#09090b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="СПБГУКА" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>СПБГУКА — Кино, сериалы и аниме без рекламы</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -14,180 +20,238 @@
   <!-- Top Header -->
   <header class="topbar">
     <div class="topbar-left">
-      <button id="sidebarToggle" class="icon-btn" title="Меню категорий">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button id="sidebarToggle" class="icon-btn focusable" type="button" aria-label="Меню">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <line x1="3" y1="6" x2="21" y2="6"></line>
           <line x1="3" y1="12" x2="21" y2="12"></line>
           <line x1="3" y1="18" x2="21" y2="18"></line>
         </svg>
       </button>
-      <a href="#" id="brandLogo" class="brand">
-        <div class="brand-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M8 5v14l11-7z"/>
+      <a href="#" id="brandLogo" class="brand focusable">
+        <div class="brand-mark">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7 5.5v13l11-6.5z"/>
           </svg>
         </div>
-        <div class="brand-text">
+        <div class="brand-wordmark">
           <span class="brand-title">СПБГУКА</span>
-          <span class="brand-sub">HD VIDEOBOX WEB • NO ADS</span>
+          <span class="brand-tag">CINEMA</span>
         </div>
       </a>
     </div>
 
-    <!-- Global Search -->
-    <div class="search-container">
+    <!-- Search Bar -->
+    <div class="search-wrap">
       <form id="searchForm" class="search-box">
-        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="11" cy="11" r="8"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
         <input
-          type="text"
+          type="search"
           id="searchInput"
-          placeholder="Поиск любого фильма, сериала, аниме (например: Слово пацана, Во все тяжкие, Брат, Ведьмак)..."
+          class="focusable"
+          placeholder="Поиск фильма, сериала, актёра или аниме..."
           autocomplete="off"
+          enterkeyhint="search"
         />
-        <button type="button" id="clearSearchBtn" class="clear-search-btn hidden" title="Очистить">✕</button>
-        <button type="submit" class="search-submit-btn">Найти в базах</button>
+        <span class="search-kbd" aria-hidden="true">/</span>
+        <button type="button" id="clearSearchBtn" class="clear-search-btn hidden" aria-label="Очистить">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+        <button type="submit" class="search-submit-btn focusable">Найти</button>
       </form>
-      <div class="quick-search-tags">
-        <span>Быстрый поиск:</span>
-        <button type="button" class="quick-tag" data-query="Во все тяжкие">Во все тяжкие</button>
-        <button type="button" class="quick-tag" data-query="Слово пацана">Слово пацана</button>
-        <button type="button" class="quick-tag" data-query="Брат">Брат</button>
-        <button type="button" class="quick-tag" data-query="Кухня">Кухня</button>
-        <button type="button" class="quick-tag" data-query="Ведьмак">Ведьмак</button>
-        <button type="button" class="quick-tag" data-query="Наруто">Наруто</button>
-      </div>
     </div>
 
-    <!-- Status Badges -->
+    <!-- Topbar Right Controls -->
     <div class="topbar-right">
-      <button id="adShieldBtn" class="status-pill adshield-active" title="Встроенный фильтр вырезает всю видеорекламу, баннеры казино и всплывающие окна">
-        <span class="pulse-dot green"></span>
-        <span>Ad-Shield: <strong>0% РЕКЛАМЫ</strong></span>
-      </button>
-      <button id="parsersStatusBtn" class="status-pill parsers-pill" title="Статус парсеров и видео-балансеров">
-        <span class="pulse-dot cyan"></span>
-        <span>Парсеры: <strong>7 ОНЛАЙН</strong></span>
+      <button id="parsersStatusBtn" class="status-pill focusable" type="button" title="Источники видеопотоков">
+        <span class="status-dot"></span>
+        <span>Прямой поток • Без рекламы</span>
       </button>
     </div>
   </header>
 
-  <div class="app-layout">
-    <!-- Left Navigation Sidebar (HD VideoBox Catalog Drawer) -->
+  <div class="app-shell">
+    <!-- Left Navigation Sidebar (Desktop & Smart TV) -->
     <aside id="sidebar" class="sidebar">
-      <div class="sidebar-section">
-        <div class="sidebar-label">КАТАЛОГ СПБГУКА</div>
+      <div class="sidebar-group">
+        <div class="sidebar-label">Каталог</div>
         <nav class="nav-list">
-          <button class="nav-item active" data-category="all">
-            <span class="nav-icon">🔥</span>
-            <span class="nav-text">Весь каталог</span>
+          <button class="nav-item active focusable" data-category="all" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+            <span>Главная</span>
           </button>
-          <button class="nav-item" data-category="popular">
-            <span class="nav-icon">⚡</span>
-            <span class="nav-text">Популярные</span>
+          <button class="nav-item focusable" data-category="popular" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span>Популярное</span>
           </button>
-          <button class="nav-item" data-category="new">
-            <span class="nav-icon">🆕</span>
-            <span class="nav-text">Новинки</span>
+          <button class="nav-item focusable" data-category="new" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span>Новинки</span>
           </button>
-          <button class="nav-item" data-category="movie">
-            <span class="nav-icon">🎬</span>
-            <span class="nav-text">Фильмы</span>
+          <button class="nav-item focusable" data-category="movie" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
+              <line x1="7" y1="2" x2="7" y2="22"></line>
+              <line x1="17" y1="2" x2="17" y2="22"></line>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+            </svg>
+            <span>Фильмы</span>
           </button>
-          <button class="nav-item" data-category="series">
-            <span class="nav-icon">📺</span>
-            <span class="nav-text">Сериалы</span>
+          <button class="nav-item focusable" data-category="series" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
+              <polyline points="17 2 12 7 7 2"></polyline>
+            </svg>
+            <span>Сериалы</span>
           </button>
-          <button class="nav-item" data-category="cartoon">
-            <span class="nav-icon">🧸</span>
-            <span class="nav-text">Мультфильмы</span>
+          <button class="nav-item focusable" data-category="cartoon" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+              <line x1="9" y1="9" x2="9.01" y2="9"></line>
+              <line x1="15" y1="9" x2="15.01" y2="9"></line>
+            </svg>
+            <span>Мультфильмы</span>
           </button>
-          <button class="nav-item" data-category="anime">
-            <span class="nav-icon">⛩️</span>
-            <span class="nav-text">Аниме</span>
+          <button class="nav-item focusable" data-category="anime" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+            </svg>
+            <span>Аниме</span>
           </button>
         </nav>
       </div>
 
-      <div class="sidebar-section">
-        <div class="sidebar-label">ЛИЧНЫЙ КАБИНЕТ</div>
+      <div class="sidebar-group">
+        <div class="sidebar-label">Библиотека</div>
         <nav class="nav-list">
-          <button class="nav-item" data-category="favorites">
-            <span class="nav-icon">⭐</span>
-            <span class="nav-text">Избранное</span>
+          <button class="nav-item focusable" data-category="favorites" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Избранное</span>
             <span id="favCountBadge" class="count-badge">0</span>
           </button>
-          <button class="nav-item" data-category="history">
-            <span class="nav-icon">🕒</span>
-            <span class="nav-text">История просмотра</span>
+          <button class="nav-item focusable" data-category="history" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+              <path d="M3 3v5h5"></path>
+              <path d="M12 7v5l4 2"></path>
+            </svg>
+            <span>История</span>
             <span id="historyCountBadge" class="count-badge">0</span>
           </button>
         </nav>
       </div>
 
-      <div class="sidebar-section parsers-box">
-        <div class="sidebar-label">АКТИВНЫЕ ИСТОЧНИКИ (ПАРСЕРЫ)</div>
-        <ul class="mirror-list">
-          <li><span class="dot ok"></span> HDRezka Mirror <small>18 мс</small></li>
-          <li><span class="dot ok"></span> Filmix PRO 4K <small>24 мс</small></li>
-          <li><span class="dot ok"></span> Alloha / Collaps <small>31 мс</small></li>
-          <li><span class="dot ok"></span> Kodik Anime/DB <small>22 мс</small></li>
-          <li><span class="dot ok"></span> Videocdn / HDVB <small>29 мс</small></li>
-          <li><span class="dot ok"></span> VidSrc Global <small>40 мс</small></li>
-          <li><span class="dot ok"></span> Direct No-Ads CDN <small>12 мс</small></li>
-        </ul>
-        <div class="adblock-summary">
-          🛡️ Заблокировано рекламных вставок за сессию: <strong id="blockedAdsCounter">142</strong>
+      <div class="sidebar-footer">
+        <div class="sidebar-sources-card">
+          <div class="sources-head">
+            <span class="status-dot"></span>
+            <span>Источники онлайн</span>
+          </div>
+          <p class="sources-desc">Collaps, Kinogram, HDRezka, VidSrc, IMDb, Wikidata RU</p>
         </div>
       </div>
     </aside>
 
-    <!-- Main Content Area -->
+    <!-- Main Content -->
     <main class="main-content">
-      <!-- Continue Watching Banner (if history exists) -->
-      <section id="continueWatchingBar" class="continue-banner hidden">
-        <div class="continue-info">
-          <span class="continue-tag">▶ ПРОДОЛЖИТЬ ПРОСМОТР</span>
-          <strong id="continueTitle">Во все тяжкие</strong>
-          <span id="continueMeta" class="continue-meta">Сезон 1, Серия 1 • Озвучка: LostFilm • 1080p</span>
-        </div>
-        <div class="continue-actions">
-          <button id="continuePlayBtn" class="btn-primary btn-sm">Смотреть с того же места</button>
+      <!-- Featured Hero Spotlight -->
+      <section id="heroBanner" class="hero-banner hidden">
+        <div id="heroBackdrop" class="hero-backdrop"></div>
+        <div class="hero-vignette"></div>
+        <div class="hero-content">
+          <div class="hero-meta-row">
+            <span id="heroBadge" class="hero-pill-brand">В центре внимания</span>
+            <span id="heroKp" class="hero-rating kp">КП 8.9</span>
+            <span id="heroImdb" class="hero-rating imdb">IMDb 9.5</span>
+            <span id="heroYear" class="hero-meta-text">2008–2013</span>
+            <span id="heroGenres" class="hero-meta-text">Криминал, Драма</span>
+          </div>
+          <h2 id="heroTitle" class="hero-title">Во все тяжкие</h2>
+          <p id="heroSynopsis" class="hero-synopsis"></p>
+          <div class="hero-actions">
+            <button id="heroWatchBtn" class="btn-primary focusable" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 4l15 8-15 8z"/>
+              </svg>
+              <span>Смотреть</span>
+            </button>
+            <button id="heroInfoBtn" class="btn-glass focusable" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <span>Подробнее</span>
+            </button>
+          </div>
         </div>
       </section>
 
-      <!-- Filter Strip (HD VideoBox Filter Bar) -->
+      <!-- Continue Watching Strip -->
+      <section id="continueWatchingBar" class="continue-strip hidden">
+        <div class="continue-left">
+          <div class="continue-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M6 4l15 8-15 8z"/>
+            </svg>
+          </div>
+          <div class="continue-text">
+            <span class="continue-eyebrow">Продолжить просмотр</span>
+            <div class="continue-title-line">
+              <strong id="continueTitle">—</strong>
+              <span id="continueMeta" class="continue-meta"></span>
+            </div>
+          </div>
+        </div>
+        <button id="continuePlayBtn" class="btn-primary btn-sm focusable" type="button">Воспроизвести</button>
+      </section>
+
+      <!-- Filter Strip -->
       <section class="filter-bar">
-        <div class="genre-pills" id="genrePills">
-          <button class="genre-pill active" data-genre="all">Все жанры</button>
-          <button class="genre-pill" data-genre="Фантастика">Фантастика</button>
-          <button class="genre-pill" data-genre="Боевик">Боевик</button>
-          <button class="genre-pill" data-genre="Драма">Драма</button>
-          <button class="genre-pill" data-genre="Криминал">Криминал</button>
-          <button class="genre-pill" data-genre="Комедия">Комедия</button>
-          <button class="genre-pill" data-genre="Триллер">Триллер</button>
-          <button class="genre-pill" data-genre="Приключения">Приключения</button>
-          <button class="genre-pill" data-genre="Фэнтези">Фэнтези</button>
-          <button class="genre-pill" data-genre="Детектив">Детектив</button>
-          <button class="genre-pill" data-genre="Аниме">Аниме</button>
+        <div class="genre-scroll" id="genrePills">
+          <button class="genre-pill active focusable" data-genre="all" type="button">Все жанры</button>
+          <button class="genre-pill focusable" data-genre="Фантастика" type="button">Фантастика</button>
+          <button class="genre-pill focusable" data-genre="Боевик" type="button">Боевик</button>
+          <button class="genre-pill focusable" data-genre="Драма" type="button">Драма</button>
+          <button class="genre-pill focusable" data-genre="Криминал" type="button">Криминал</button>
+          <button class="genre-pill focusable" data-genre="Комедия" type="button">Комедия</button>
+          <button class="genre-pill focusable" data-genre="Триллер" type="button">Триллер</button>
+          <button class="genre-pill focusable" data-genre="Приключения" type="button">Приключения</button>
+          <button class="genre-pill focusable" data-genre="Фэнтези" type="button">Фэнтези</button>
+          <button class="genre-pill focusable" data-genre="Детектив" type="button">Детектив</button>
+          <button class="genre-pill focusable" data-genre="Аниме" type="button">Аниме</button>
         </div>
 
         <div class="filter-selects">
-          <select id="yearFilter" class="select-control">
+          <select id="yearFilter" class="select-control focusable" aria-label="Фильтр по годам">
             <option value="all">Все годы</option>
             <option value="2024-2026">2024 – 2026</option>
             <option value="2020-2023">2020 – 2023</option>
             <option value="2010-2019">2010 – 2019</option>
-            <option value="old">Классика (до 2010)</option>
+            <option value="old">До 2010</option>
           </select>
 
-          <select id="sortFilter" class="select-control">
+          <select id="sortFilter" class="select-control focusable" aria-label="Сортировка">
             <option value="popular">По популярности</option>
-            <option value="rating">По рейтингу КП / IMDb</option>
-            <option value="year">По году выхода</option>
-            <option value="title">По названию (А-Я)</option>
+            <option value="rating">По рейтингу</option>
+            <option value="year">Сначала новые</option>
+            <option value="title">По алфавиту</option>
           </select>
         </div>
       </section>
@@ -195,63 +259,209 @@
       <!-- Section Heading -->
       <div class="section-header">
         <div>
-          <h1 id="sectionTitle">Популярные фильмы и сериалы</h1>
-          <p id="sectionSubtitle" class="section-subtitle">
-            Автоматический парсинг потоков со всех популярных балансеров • Любая студия озвучки • Без рекламы и редиректов
-          </p>
+          <h1 id="sectionTitle">Каталог</h1>
+          <p id="sectionSubtitle" class="section-subtitle"></p>
         </div>
         <div class="results-counter">
-          Найдено: <strong id="resultsCount">0</strong>
+          <span id="resultsCount">0</span> тайтлов
         </div>
       </div>
 
       <!-- Loading Indicator -->
-      <div id="loadingState" class="loading-state hidden">
+      <div id="loadingState" class="state-box hidden">
         <div class="spinner"></div>
-        <p>СПБГУКА опрашивает базы Кинопоиск / IMDb / Wikidata и собирает потоки...</p>
+        <p>Поиск и сбор потоков...</p>
       </div>
 
       <!-- Empty State -->
-      <div id="emptyState" class="empty-state hidden">
-        <div class="empty-icon">🎬</div>
+      <div id="emptyState" class="state-box hidden">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="opacity:0.45;margin-bottom:10px;">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
         <h3 id="emptyTitle">Ничего не найдено</h3>
-        <p id="emptyDesc">Попробуйте изменить запрос или воспользуйтесь глобальным поиском сверху.</p>
+        <p id="emptyDesc">Попробуйте другой запрос или сбросьте фильтры.</p>
       </div>
 
-      <!-- Movies & Series Grid -->
+      <!-- Catalog Grid -->
       <div id="catalogGrid" class="catalog-grid"></div>
     </main>
   </div>
 
-  <!-- HD VideoBox Full Item Modal (Информация | Плеер и Озвучки | Файлы и Парсеры) -->
+  <!-- Mobile Bottom Navigation Bar (Android / iPhone) -->
+  <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="Навигация">
+    <button class="mob-nav-item active" data-category="all" type="button">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+      </svg>
+      <span>Главное</span>
+    </button>
+    <button class="mob-nav-item" data-category="movie" type="button">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="2" y="2" width="20" height="20" rx="2.18"></rect>
+        <line x1="7" y1="2" x2="7" y2="22"></line>
+        <line x1="17" y1="2" x2="17" y2="22"></line>
+      </svg>
+      <span>Фильмы</span>
+    </button>
+    <button class="mob-nav-item" data-category="series" type="button">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <rect x="2" y="7" width="20" height="15" rx="2"></rect>
+        <polyline points="17 2 12 7 7 2"></polyline>
+      </svg>
+      <span>Сериалы</span>
+    </button>
+    <button class="mob-nav-item" data-category="anime" type="button">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+      </svg>
+      <span>Аниме</span>
+    </button>
+    <button class="mob-nav-item" data-category="favorites" type="button">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+      </svg>
+      <span>Избранное</span>
+    </button>
+  </nav>
+
+  <!-- Cinema Modal (Player First + Segmented Tabs) -->
   <div id="itemModal" class="modal-overlay hidden">
     <div class="modal-window">
-      <!-- Modal Top Header -->
       <div class="modal-header">
         <div class="modal-title-group">
           <span id="modalTypeBadge" class="type-badge">СЕРИАЛ</span>
-          <div>
+          <div class="modal-titles">
             <h2 id="modalTitle">Название</h2>
             <span id="modalOrigTitle" class="modal-orig-title">Original Title</span>
           </div>
         </div>
 
-        <!-- Classic HD VideoBox Top Tabs -->
-        <div class="hdvb-tabs">
-          <button class="hdvb-tab" data-tab="info">📋 ИНФОРМАЦИЯ</button>
-          <button class="hdvb-tab active" data-tab="player">▶ СМОТРЕТЬ / ОЗВУЧКИ</button>
-          <button class="hdvb-tab" data-tab="files">🗂️ ФАЙЛЫ / ПАРСЕРЫ</button>
+        <div class="segmented-tabs">
+          <button class="hdvb-tab active focusable" data-tab="player" type="button">Плеер</button>
+          <button class="hdvb-tab focusable" data-tab="info" type="button">О проекте</button>
+          <button class="hdvb-tab focusable" data-tab="files" type="button">Потоки</button>
         </div>
 
         <div class="modal-header-actions">
-          <button id="modalFavBtn" class="btn-secondary btn-sm">☆ В избранное</button>
-          <button id="closeModalBtn" class="modal-close-btn" title="Закрыть (Esc)">✕</button>
+          <button id="modalFavBtn" class="btn-ghost btn-sm focusable" type="button">В избранное</button>
+          <button id="closeModalBtn" class="modal-close-btn focusable" type="button" aria-label="Закрыть">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
       </div>
 
-      <!-- Modal Body -->
       <div class="modal-body">
-        <!-- TAB 1: ИНФОРМАЦИЯ (HD VideoBox Info Screen) -->
+        <!-- TAB 1: VIDEO STAGE FIRST + CINEMA CONTROL DECK -->
+        <div id="tabPlayer" class="tab-pane active">
+          <!-- Video Stage -->
+          <div id="videoStage" class="video-stage">
+            <div id="playerOsd" class="player-osd hidden"></div>
+
+            <div id="directPlayerWrap" class="direct-player-wrap">
+              <video
+                id="html5Video"
+                class="html5-video"
+                controls
+                playsinline
+                webkit-playsinline
+                x-webkit-airplay="allow"
+                preload="auto"
+              ></video>
+              <div class="player-status-bar">
+                <div class="now-playing-label">
+                  <span class="live-indicator">DIRECT HLS</span>
+                  <span id="nowPlayingText">Подключение потока...</span>
+                </div>
+                <div class="player-tools">
+                  <label class="speed-control">
+                    <span>Скорость</span>
+                    <select id="playbackSpeedSelect" class="speed-select focusable">
+                      <option value="0.75">0.75x</option>
+                      <option value="1" selected>1.0x</option>
+                      <option value="1.25">1.25x</option>
+                      <option value="1.5">1.5x</option>
+                      <option value="2">2.0x</option>
+                    </select>
+                  </label>
+                  <button id="pipBtn" class="btn-ghost btn-xs focusable" type="button" title="Картинка в картинке">PiP</button>
+                  <button id="fullscreenBtn" class="btn-ghost btn-xs focusable" type="button" title="Во весь экран">На весь экран</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="iframePlayerWrap" class="iframe-player-wrap hidden">
+              <div id="kinoboxContainer" class="kinobox_player"></div>
+              <iframe
+                id="balancerIframe"
+                class="balancer-iframe"
+                allowfullscreen
+                allow="autoplay; fullscreen; picture-in-picture"
+              ></iframe>
+            </div>
+          </div>
+
+          <!-- Cinema Control Deck (Directly Below Player) -->
+          <div class="control-deck">
+            <!-- Season & Episode Selector (Series / Cartoons / Anime) -->
+            <div id="seriesPickerBox" class="deck-section hidden">
+              <div class="deck-head">
+                <span class="deck-label">Сезоны и серии</span>
+                <div class="season-buttons" id="seasonButtons"></div>
+                <div class="ep-nav-controls">
+                  <button id="prevEpBtn" class="btn-ghost btn-xs focusable" type="button">Предыдущая</button>
+                  <button id="nextEpBtn" class="btn-ghost btn-xs focusable" type="button">Следующая</button>
+                </div>
+              </div>
+              <div id="episodeButtons" class="episodes-strip"></div>
+            </div>
+
+            <!-- Studio Voiceover Track Selector -->
+            <div class="deck-section">
+              <div class="deck-row">
+                <span class="deck-label">Озвучка</span>
+                <div class="pills-scroll" id="voiceSelector"></div>
+              </div>
+            </div>
+
+            <!-- Quality & Source Balancer Selector -->
+            <div class="deck-section">
+              <div class="deck-row deck-split">
+                <div class="deck-sub">
+                  <span class="deck-label">Качество</span>
+                  <div class="pills-scroll" id="qualitySelector"></div>
+                </div>
+                <div class="deck-sub">
+                  <span class="deck-label">Источник</span>
+                  <div class="pills-scroll" id="balancerSelector">
+                    <button class="chip-btn active focusable" data-balancer="direct" type="button">Прямой HLS</button>
+                    <button class="chip-btn focusable" data-balancer="namy" type="button">Collaps</button>
+                    <button class="chip-btn focusable" data-balancer="kinogram" type="button">Kinogram</button>
+                    <button class="chip-btn focusable" data-balancer="vidsrc" type="button">VidSrc</button>
+                    <button class="chip-btn focusable" data-balancer="custom" type="button">Свой URL</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="customStreamRow" class="custom-url-row hidden">
+                <input type="url" id="customStreamInput" class="focusable" placeholder="Прямая ссылка на .m3u8 / .mp4 или iframe..." />
+                <button id="applyCustomStreamBtn" class="btn-primary btn-sm focusable" type="button">Запустить</button>
+              </div>
+
+              <div id="sandboxRow" class="sandbox-row hidden">
+                <label class="sandbox-check">
+                  <input type="checkbox" id="sandboxToggle" />
+                  <span>Включить Sandbox-блокировку всплывающих окон (для внешних iframe)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: INFO / DETAILS -->
         <div id="tabInfo" class="tab-pane hidden">
           <div class="info-layout">
             <div class="info-poster-col">
@@ -266,183 +476,62 @@
                   <strong id="infoRatingImdb">9.5</strong>
                 </div>
               </div>
-              <button id="switchToPlayerBtn" class="btn-primary full-width">
-                ▶ Перейти к просмотру
-              </button>
+              <button id="switchToPlayerBtn" class="btn-primary full-width focusable" type="button">Смотреть онлайн</button>
             </div>
 
             <div class="info-details-col">
               <div class="meta-grid">
                 <div class="meta-row">
-                  <span class="meta-key">Год выхода:</span>
+                  <span class="meta-key">Год выхода</span>
                   <span id="infoYear" class="meta-val">2024</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Страна:</span>
+                  <span class="meta-key">Страна</span>
                   <span id="infoCountry" class="meta-val">США</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Жанры:</span>
-                  <span id="infoGenres" class="meta-val">Драма, Криминал</span>
+                  <span class="meta-key">Жанры</span>
+                  <span id="infoGenres" class="meta-val">Драма</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Продолжительность:</span>
+                  <span class="meta-key">Длительность</span>
                   <span id="infoDuration" class="meta-val">120 мин</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Режиссёр:</span>
+                  <span class="meta-key">Режиссёр</span>
                   <span id="infoDirector" class="meta-val">—</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">В главных ролях:</span>
+                  <span class="meta-key">В ролях</span>
                   <span id="infoCast" class="meta-val">—</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">База ID:</span>
-                  <span id="infoIds" class="meta-val mono">IMDb: tt0903747 | KP: 404900</span>
+                  <span class="meta-key">Идентификаторы</span>
+                  <span id="infoIds" class="meta-val mono">—</span>
                 </div>
               </div>
 
-              <div class="synopsis-box">
-                <h3>Описание сюжета</h3>
+              <div class="info-block">
+                <h3>Описание</h3>
                 <p id="infoDescription"></p>
               </div>
 
-              <div class="available-voices-box">
-                <h3>Доступные озвучки и переводы в СПБГУКА:</h3>
+              <div class="info-block">
+                <h3>Студии озвучки</h3>
                 <div id="infoVoicesList" class="voice-badges-wrap"></div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- TAB 2: СМОТРЕТЬ / ОЗВУЧКИ (Main HD VideoBox Player + Dubbing & Season/Episode Picker) -->
-        <div id="tabPlayer" class="tab-pane active">
-          <!-- Control Matrix: Source + Voiceover + Quality -->
-          <div class="player-controls-matrix">
-            <!-- Row 1: Источник (Парсер / Балансер) -->
-            <div class="matrix-row">
-              <span class="matrix-label">📡 ИСТОЧНИК (БАЛАНСЕР):</span>
-              <div class="matrix-options" id="balancerSelector">
-                <button class="chip-btn active" data-balancer="direct">
-                  ⚡ СПБГУКА Direct HLS (Чистый поток • 0% рекламы)
-                </button>
-                <button class="chip-btn" data-balancer="namy">
-                  🌐 Балансер Collaps / Namy (Все озвучки)
-                </button>
-                <button class="chip-btn" data-balancer="kinogram">
-                  🎬 Балансер Kinogram Mirror
-                </button>
-                <button class="chip-btn" data-balancer="vidsrc">
-                  🌍 Балансер VidSrc.su / 2Embed
-                </button>
-                <button class="chip-btn" data-balancer="custom">
-                  🔗 Свой поток (.mp4 / .m3u8)
-                </button>
-              </div>
-            </div>
-
-            <!-- Custom Stream Input (when "Свой поток" is selected) -->
-            <div id="customStreamRow" class="matrix-row hidden">
-              <span class="matrix-label">🔗 ПРЯМАЯ ССЫЛКА:</span>
-              <div class="custom-url-group">
-                <input type="text" id="customStreamInput" placeholder="Вставьте прямую ссылку на .mp4 / .m3u8 или внешний плеер..." />
-                <button id="applyCustomStreamBtn" class="btn-primary btn-sm">Запустить</button>
-              </div>
-            </div>
-
-            <!-- Row 2: Озвучка (Студия перевода) -->
-            <div class="matrix-row">
-              <span class="matrix-label">🎙️ ОЗВУЧКА / СТУДИЯ:</span>
-              <div class="matrix-options" id="voiceSelector"></div>
-            </div>
-
-            <!-- Row 3: Качество и Защита от рекламы -->
-            <div class="matrix-row split-row">
-              <div class="matrix-sub">
-                <span class="matrix-label">💎 КАЧЕСТВО:</span>
-                <div class="matrix-options" id="qualitySelector"></div>
-              </div>
-              <div class="matrix-sub right">
-                <label class="adshield-toggle" title="В режиме СПБГУКА Direct реклама вырезана на 100% на уровне HLS-потока. Для внешних iframe можно включить строгий Sandbox.">
-                  <input type="checkbox" id="sandboxToggle" />
-                  <span>🛡️ Строгий Sandbox для внешних iframe</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- Series Season & Episode Bar (shown automatically for Series / Cartoons / Anime) -->
-          <div id="seriesPickerBox" class="series-picker-box hidden">
-            <div class="seasons-row">
-              <span class="matrix-label">📁 СЕЗОНЫ:</span>
-              <div id="seasonButtons" class="season-buttons"></div>
-              <div class="ep-nav-controls">
-                <button id="prevEpBtn" class="btn-secondary btn-xs">⏮ Пред. серия</button>
-                <button id="nextEpBtn" class="btn-secondary btn-xs">След. серия ⏭</button>
-              </div>
-            </div>
-            <div id="episodeButtons" class="episodes-grid"></div>
-          </div>
-
-          <!-- Video Stage -->
-          <div class="video-stage">
-            <!-- OSD Toast inside video stage when switching voiceover/quality/episode -->
-            <div id="playerOsd" class="player-osd hidden">
-              🎙️ Озвучка: HDRezka Studio • 1080p Ultra
-            </div>
-
-            <!-- Clean Built-in HTML5 Video Player -->
-            <div id="directPlayerWrap" class="direct-player-wrap">
-              <video
-                id="html5Video"
-                class="html5-video"
-                controls
-                playsinline
-                poster=""
-              ></video>
-              <div class="player-bottom-bar">
-                <div class="now-playing-label">
-                  <span class="live-badge">БЕЗ РЕКЛАМЫ</span>
-                  <span id="nowPlayingText">Готов к воспроизведению</span>
-                </div>
-                <div class="player-extra-tools">
-                  <label class="speed-label">
-                    Скорость:
-                    <select id="playbackSpeedSelect" class="speed-select">
-                      <option value="0.75">0.75x</option>
-                      <option value="1" selected>1.0x</option>
-                      <option value="1.25">1.25x</option>
-                      <option value="1.5">1.5x</option>
-                      <option value="2">2.0x</option>
-                    </select>
-                  </label>
-                  <button id="pipBtn" class="btn-secondary btn-xs" title="Картинка в картинке">📺 PiP</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- External Multi-Balancer Iframe Container -->
-            <div id="iframePlayerWrap" class="iframe-player-wrap hidden">
-              <div id="kinoboxContainer" class="kinobox_player"></div>
-              <iframe
-                id="balancerIframe"
-                class="balancer-iframe"
-                allowfullscreen
-                allow="autoplay; fullscreen; picture-in-picture"
-              ></iframe>
-            </div>
-          </div>
-        </div>
-
-        <!-- TAB 3: ФАЙЛЫ / ПАРСЕРЫ (Classic HD VideoBox Parsed Stream List) -->
+        <!-- TAB 3: PARSED STREAMS & MIRRORS -->
         <div id="tabFiles" class="tab-pane hidden">
           <div class="files-header">
             <div>
-              <h3>Прямой список распарсенных потоков (как во вкладке «Файлы» HD VideoBox)</h3>
-              <p>Нажмите на любой поток ниже, чтобы мгновенно запустить его в этой озвучке и качестве без рекламы.</p>
+              <h3>Доступные потоки и зеркала</h3>
+              <p>Выберите студию перевода и разрешение для прямого запуска.</p>
             </div>
-            <button id="refreshParsersBtn" class="btn-secondary btn-sm">🔄 Переопросить зеркала</button>
+            <button id="refreshParsersBtn" class="btn-ghost btn-sm focusable" type="button">Обновить список</button>
           </div>
           <div id="filesTreeContainer" class="files-tree-container"></div>
         </div>
@@ -450,33 +539,38 @@
     </div>
   </div>
 
-  <!-- Parsers Status Modal -->
+  <!-- Sources / Compatibility Modal -->
   <div id="parsersModal" class="modal-overlay hidden">
     <div class="modal-window modal-sm">
       <div class="modal-header">
-        <h2>📡 Монитор парсеров и защиты от рекламы СПБГУКА</h2>
-        <button id="closeParsersModalBtn" class="modal-close-btn">✕</button>
+        <h2>Источники и платформы</h2>
+        <button id="closeParsersModalBtn" class="modal-close-btn focusable" type="button" aria-label="Закрыть">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
       </div>
-      <div class="modal-body parsers-modal-body">
+      <div class="modal-body">
         <p class="parsers-intro">
-          <strong>СПБГУКА</strong> работает по принципу классического <em>HD VideoBox</em>: агрегирует метаданные из открытых мировых баз (Кинопоиск / IMDb / Wikidata / TVMaze) и подключает потоки с зеркал без встроенных прероллов казино и букмекеров.
+          <strong>СПБГУКА</strong> извлекает чистые HLS-потоки (.m3u8) с балансеров без рекламных вставок и адаптируется под экран вашего устройства.
         </p>
         <div class="parser-cards-grid">
           <div class="parser-card">
-            <div class="p-head"><strong>HDRezka No-Ads Mirror</strong> <span class="badge-ok">ОНЛАЙН</span></div>
-            <p>Прямой парсинг переводов HDRezka Studio, Red Head Sound, Кубик в Кубе, LostFilm.</p>
+            <div class="p-head"><strong>Прямой HLS-прокси</strong> <span class="badge-ok">Активен</span></div>
+            <p>Вырезает VAST-рекламу, отдает мульти-аудио дорожки для iOS, Android, Smart TV и ПК.</p>
           </div>
           <div class="parser-card">
-            <div class="p-head"><strong>Kinobox Multi-Balancer</strong> <span class="badge-ok">ОНЛАЙН</span></div>
-            <p>Автоматический поиск по Кинопоиск ID / IMDb ID в базах Alloha, Kodik, Collaps, Videocdn.</p>
+            <div class="p-head"><strong>Метаданные и поиск</strong> <span class="badge-ok">Активен</span></div>
+            <p>IMDb, Wikidata RU, Русская Википедия — поиск любого фильма и сериала на русском языке.</p>
           </div>
           <div class="parser-card">
-            <div class="p-head"><strong>VidSrc Global Stream</strong> <span class="badge-ok">ОНЛАЙН</span></div>
-            <p>Международный балансер по IMDb ID с изолированной Ad-Shield песочницей.</p>
+            <div class="p-head"><strong>LG webOS / Smart TV</strong> <span class="badge-ok">Поддержка</span></div>
+            <p>Навигация стрелками пульта, кнопка «Назад» (461), медиа-клавиши Play/Pause и перемотка.</p>
           </div>
           <div class="parser-card">
-            <div class="p-head"><strong>Ad-Shield Фильтр</strong> <span class="badge-ok">АКТИВЕН</span></div>
-            <p>Блокировка VAST/VPAID прероллов, всплывающих окон (popunder) и редиректов.</p>
+            <div class="p-head"><strong>iPhone / Android / Linux</strong> <span class="badge-ok">Поддержка</span></div>
+            <p>Переключение озвучек работает и в нативном плеере iOS Safari, и в Chrome/Firefox на Linux/Windows.</p>
           </div>
         </div>
       </div>

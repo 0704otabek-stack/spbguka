@@ -994,7 +994,7 @@ async function handleDetails(imdbId, fallbackTitle) {
 }
 
 // HLS Stream Proxy: Fetches master.m3u8, audio/video sub-playlists, and .ts/.vtt segments with matching UA & Origin
-async function handleHlsProxy(req, res, targetUrl) {
+async function handleHlsProxy(req, res, targetUrl, audioIdxParam, singleAudioParam) {
   if (!targetUrl) {
     res.writeHead(400);
     return res.end('Missing url param');
@@ -1024,6 +1024,17 @@ async function handleHlsProxy(req, res, targetUrl) {
       const lines = rawText.split(/\r?\n/);
       const outLines = [];
 
+      const parsedAudioIdx = (audioIdxParam !== null && audioIdxParam !== undefined && audioIdxParam !== '')
+        ? parseInt(audioIdxParam, 10)
+        : -1;
+      const audioLinesCount = lines.filter(l =>
+        l.startsWith('#EXT-X-MEDIA:TYPE=AUDIO') && !l.includes('GROUP-ID="failover-audio-0"')
+      ).length;
+      const effectiveAudioIdx = (Number.isInteger(parsedAudioIdx) && parsedAudioIdx >= 0 && audioLinesCount > 0)
+        ? Math.min(parsedAudioIdx, audioLinesCount - 1)
+        : -1;
+      let audioCounter = 0;
+
       for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
 
@@ -1032,6 +1043,18 @@ async function handleHlsProxy(req, res, targetUrl) {
         if (line.includes('AUDIO="failover-audio-0"')) {
           i++; // skip URL line right after
           continue;
+        }
+
+        // For iOS Safari & Smart TVs native HLS: honor explicit audio track selection
+        if (line.startsWith('#EXT-X-MEDIA:TYPE=AUDIO') && effectiveAudioIdx >= 0) {
+          const currentIdx = audioCounter++;
+          if (singleAudioParam === '1' && currentIdx !== effectiveAudioIdx) {
+            continue;
+          }
+          const isSelected = currentIdx === effectiveAudioIdx;
+          line = line
+            .replace(/DEFAULT=(YES|NO)/g, `DEFAULT=${isSelected ? 'YES' : 'NO'}`)
+            .replace(/AUTOSELECT=(YES|NO)/g, `AUTOSELECT=${isSelected ? 'YES' : 'NO'}`);
         }
 
         // Rewrite URI="..." inside #EXT-X-MEDIA or #EXT-X-KEY or #EXT-X-MAP
@@ -1117,7 +1140,9 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/hls-proxy') {
     const targetUrl = parsedUrl.searchParams.get('url');
-    return handleHlsProxy(req, res, targetUrl);
+    const audioParam = parsedUrl.searchParams.get('audio');
+    const singleAudioParam = parsedUrl.searchParams.get('singleAudio');
+    return handleHlsProxy(req, res, targetUrl, audioParam, singleAudioParam);
   }
 
   if (pathname === '/api/catalog') {

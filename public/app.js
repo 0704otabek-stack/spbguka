@@ -1,4 +1,4 @@
-// СПБГУКА — HD VideoBox Web Edition Client Application (with Real HLS Multi-Audio Streaming)
+// СПБГУКА — Cross-Platform Cinema App (PC, Linux, Android, iOS Safari, LG webOS Smart TV)
 
 const state = {
   category: 'all',
@@ -7,6 +7,7 @@ const state = {
   sort: 'popular',
   searchQuery: '',
   catalogItems: [],
+  featuredItem: null,
   favorites: JSON.parse(localStorage.getItem('spbguka_favorites') || '[]'),
   history: JSON.parse(localStorage.getItem('spbguka_history') || '[]'),
   currentItem: null,
@@ -15,13 +16,13 @@ const state = {
   selectedVoice: 'Рус. Дублированный',
   selectedQuality: 'Авто (Макс. 1080p)',
   selectedSeason: 1,
-  selectedEpisode: 1,
-  blockedAds: 142
+  selectedEpisode: 1
 };
 
 let hlsInstance = null;
 let currentLoadedHlsUrl = '';
 let osdTimeout = null;
+let currentTvFocusedEl = null;
 
 // DOM Elements
 const catalogGrid = document.getElementById('catalogGrid');
@@ -31,13 +32,25 @@ const resultsCount = document.getElementById('resultsCount');
 const sectionTitle = document.getElementById('sectionTitle');
 const sectionSubtitle = document.getElementById('sectionSubtitle');
 
+// Hero Elements
+const heroBanner = document.getElementById('heroBanner');
+const heroBackdrop = document.getElementById('heroBackdrop');
+const heroBadge = document.getElementById('heroBadge');
+const heroKp = document.getElementById('heroKp');
+const heroImdb = document.getElementById('heroImdb');
+const heroYear = document.getElementById('heroYear');
+const heroGenres = document.getElementById('heroGenres');
+const heroTitle = document.getElementById('heroTitle');
+const heroSynopsis = document.getElementById('heroSynopsis');
+const heroWatchBtn = document.getElementById('heroWatchBtn');
+const heroInfoBtn = document.getElementById('heroInfoBtn');
+
+// Search & Nav
 const searchForm = document.getElementById('searchForm');
 const searchInput = document.getElementById('searchInput');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
-
 const favCountBadge = document.getElementById('favCountBadge');
 const historyCountBadge = document.getElementById('historyCountBadge');
-const blockedAdsCounter = document.getElementById('blockedAdsCounter');
 
 const continueWatchingBar = document.getElementById('continueWatchingBar');
 const continueTitle = document.getElementById('continueTitle');
@@ -68,13 +81,15 @@ const infoVoicesList = document.getElementById('infoVoicesList');
 const switchToPlayerBtn = document.getElementById('switchToPlayerBtn');
 
 // Player Tab Elements
+const videoStage = document.getElementById('videoStage');
 const balancerSelector = document.getElementById('balancerSelector');
 const customStreamRow = document.getElementById('customStreamRow');
 const customStreamInput = document.getElementById('customStreamInput');
 const applyCustomStreamBtn = document.getElementById('applyCustomStreamBtn');
+const sandboxRow = document.getElementById('sandboxRow');
+const sandboxToggle = document.getElementById('sandboxToggle');
 const voiceSelector = document.getElementById('voiceSelector');
 const qualitySelector = document.getElementById('qualitySelector');
-const sandboxToggle = document.getElementById('sandboxToggle');
 
 const seriesPickerBox = document.getElementById('seriesPickerBox');
 const seasonButtons = document.getElementById('seasonButtons');
@@ -88,6 +103,7 @@ const html5Video = document.getElementById('html5Video');
 const nowPlayingText = document.getElementById('nowPlayingText');
 const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
 const pipBtn = document.getElementById('pipBtn');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
 
 const iframePlayerWrap = document.getElementById('iframePlayerWrap');
 const balancerIframe = document.getElementById('balancerIframe');
@@ -96,29 +112,28 @@ const kinoboxContainer = document.getElementById('kinoboxContainer');
 const filesTreeContainer = document.getElementById('filesTreeContainer');
 const refreshParsersBtn = document.getElementById('refreshParsersBtn');
 
-// Parsers Modal
+// Sources Modal
 const parsersModal = document.getElementById('parsersModal');
 const parsersStatusBtn = document.getElementById('parsersStatusBtn');
-const adShieldBtn = document.getElementById('adShieldBtn');
 const closeParsersModalBtn = document.getElementById('closeParsersModalBtn');
 
 const CATEGORY_TITLES = {
-  all: 'Весь каталог СПБГУКА (HD VideoBox)',
-  popular: 'Популярные фильмы и сериалы сейчас',
-  new: 'Новинки кино и сериалов (2023–2026)',
-  movie: 'Фильмы в HD 1080p / 4K без рекламы',
-  series: 'Сериалы во всех озвучках',
-  cartoon: 'Мультфильмы и анимация',
-  anime: 'Аниме (Studio Band / AniLibria / Субтитры)',
-  favorites: '⭐ Избранные фильмы и сериалы',
-  history: '🕒 История вашего просмотра'
+  all: 'Весь каталог',
+  popular: 'Популярное сейчас',
+  new: 'Новинки 2023–2026',
+  movie: 'Фильмы',
+  series: 'Сериалы',
+  cartoon: 'Мультфильмы',
+  anime: 'Аниме',
+  favorites: 'Избранное',
+  history: 'История просмотра'
 };
 
 const TYPE_LABELS = {
-  movie: 'ФИЛЬМ',
-  series: 'СЕРИАЛ',
-  cartoon: 'МУЛЬТФИЛЬМ',
-  anime: 'АНИМЕ'
+  movie: 'Фильм',
+  series: 'Сериал',
+  cartoon: 'Мультфильм',
+  anime: 'Аниме'
 };
 
 function updateBadges() {
@@ -129,9 +144,8 @@ function updateBadges() {
     const last = state.history[0];
     continueWatchingBar.classList.remove('hidden');
     continueTitle.textContent = last.title;
-    const epPart = (last.type === 'series' || last.type === 'anime' || last.type === 'cartoon')
-      ? `Сезон ${last.season || 1}, Серия ${last.episode || 1} • `
-      : '';
+    const isEpisodic = last.type === 'series' || last.type === 'anime' || last.type === 'cartoon';
+    const epPart = isEpisodic ? `Сезон ${last.season || 1}, Серия ${last.episode || 1} • ` : '';
     continueMeta.textContent = `${epPart}Озвучка: ${last.voice || 'Дубляж'} • ${last.quality || '1080p'}`;
   } else {
     continueWatchingBar.classList.add('hidden');
@@ -152,11 +166,14 @@ function addToHistory(item, season, episode, voice, quality, currentTime = 0) {
     originalTitle: item.originalTitle,
     type: item.type,
     year: item.year,
+    yearRange: item.yearRange,
     ratingKp: item.ratingKp,
     ratingImdb: item.ratingImdb,
     poster: item.poster,
+    backdrop: item.backdrop,
     genres: item.genres || ['Кино'],
     voices: item.voices || ['Рус. Дублированный'],
+    description: item.description || '',
     season,
     episode,
     voice,
@@ -170,9 +187,36 @@ function addToHistory(item, season, episode, voice, quality, currentTime = 0) {
   updateBadges();
 }
 
-function incrementAdBlockCounter(amount = 3) {
-  state.blockedAds += amount;
-  blockedAdsCounter.textContent = state.blockedAds;
+function syncCategoryButtons(category) {
+  document.querySelectorAll('.nav-item').forEach(b => {
+    b.classList.toggle('active', b.dataset.category === category);
+  });
+  document.querySelectorAll('.mob-nav-item').forEach(b => {
+    b.classList.toggle('active', b.dataset.category === category);
+  });
+}
+
+function renderHeroBanner(items) {
+  const showHero = !state.searchQuery.trim() && state.category !== 'favorites' && state.category !== 'history' && items.length > 0;
+  if (!showHero) {
+    heroBanner.classList.add('hidden');
+    state.featuredItem = null;
+    return;
+  }
+
+  const featured = items[0];
+  state.featuredItem = featured;
+  heroBanner.classList.remove('hidden');
+
+  const bgUrl = featured.backdrop || featured.poster;
+  heroBackdrop.style.backgroundImage = `url("${bgUrl}")`;
+  heroBadge.textContent = TYPE_LABELS[featured.type] || 'В фокусе';
+  heroKp.textContent = `КП ${featured.ratingKp || '8.5'}`;
+  heroImdb.textContent = `IMDb ${featured.ratingImdb || '8.6'}`;
+  heroYear.textContent = featured.yearRange || featured.year || '2024';
+  heroGenres.textContent = (featured.genres || []).slice(0, 3).join(', ');
+  heroTitle.textContent = featured.title;
+  heroSynopsis.textContent = featured.description || '';
 }
 
 async function loadCatalog() {
@@ -181,8 +225,8 @@ async function loadCatalog() {
   catalogGrid.innerHTML = '';
 
   if (state.searchQuery.trim()) {
-    sectionTitle.textContent = `Результаты поиска: «${state.searchQuery}»`;
-    sectionSubtitle.textContent = 'Глобальный поиск по базам Кинопоиск, IMDb, Wikidata RU и балансерам СПБГУКА';
+    sectionTitle.textContent = `Поиск: «${state.searchQuery}»`;
+    sectionSubtitle.textContent = 'Результаты из IMDb, Wikidata RU и подключённых видео-балансеров';
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(state.searchQuery)}`);
       const data = await res.json();
@@ -192,15 +236,15 @@ async function loadCatalog() {
     }
   } else if (state.category === 'favorites') {
     sectionTitle.textContent = CATEGORY_TITLES.favorites;
-    sectionSubtitle.textContent = 'Сохранённые вами фильмы и сериалы для быстрого доступа';
+    sectionSubtitle.textContent = 'Сохранённые фильмы и сериалы';
     state.catalogItems = [...state.favorites];
   } else if (state.category === 'history') {
     sectionTitle.textContent = CATEGORY_TITLES.history;
-    sectionSubtitle.textContent = 'Продолжайте просмотр с выбранной серии, студии озвучки и секунды';
+    sectionSubtitle.textContent = 'Недавно открытые фильмы и серии';
     state.catalogItems = [...state.history];
   } else {
     sectionTitle.textContent = CATEGORY_TITLES[state.category] || CATEGORY_TITLES.all;
-    sectionSubtitle.textContent = 'Автоматический парсинг прямых HLS-потоков со всех балансеров • Любая студия озвучки • 0% рекламы';
+    sectionSubtitle.textContent = 'Прямые HLS-потоки • Выбор озвучки без рекламы';
     try {
       const params = new URLSearchParams({
         category: state.category,
@@ -217,6 +261,7 @@ async function loadCatalog() {
   }
 
   loadingState.classList.add('hidden');
+  renderHeroBanner(state.catalogItems);
   renderCatalogGrid(state.catalogItems);
 }
 
@@ -232,8 +277,9 @@ function renderCatalogGrid(items) {
 
   for (const item of items) {
     const card = document.createElement('article');
-    card.className = 'movie-card';
-    const typeLabel = TYPE_LABELS[item.type] || 'КИНО';
+    card.className = 'movie-card focusable';
+    card.tabIndex = 0;
+    const typeLabel = TYPE_LABELS[item.type] || 'Кино';
     const voicesList = item.voices || ['Рус. Дублированный', 'HDrezka Studio', 'Red Head Sound'];
     const historyMatch = state.history.find(h => h.imdbId === item.imdbId);
 
@@ -249,17 +295,16 @@ function renderCatalogGrid(items) {
         <div class="card-badges-top">
           <span class="card-type-pill">${typeLabel}</span>
           <div class="card-ratings-pill">
-            ${item.ratingKp ? `<span class="r-badge kp">КП ${item.ratingKp}</span>` : ''}
-            ${item.ratingImdb ? `<span class="r-badge imdb">IMDb ${item.ratingImdb}</span>` : ''}
+            ${item.ratingKp ? `<span class="r-badge kp">${item.ratingKp}</span>` : ''}
+            ${item.ratingImdb ? `<span class="r-badge imdb">${item.ratingImdb}</span>` : ''}
           </div>
         </div>
-        <div class="card-quality-ribbon">
-          <span class="q-pill">1080p HLS</span>
-          <span class="voices-count-pill">🎙️ ${voicesList.length} озвучек</span>
-        </div>
         <div class="card-play-hover">
-          <div class="play-circle">▶</div>
-          <span style="font-size:0.78rem;font-weight:700;color:#fff;">Смотреть без рекламы</span>
+          <div class="play-circle">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M7 5v14l11-7z"/>
+            </svg>
+          </div>
         </div>
       </div>
       <div class="card-body">
@@ -267,13 +312,13 @@ function renderCatalogGrid(items) {
         <div class="card-sub">${item.yearRange || item.year} • ${(item.genres || ['Кино']).slice(0, 2).join(', ')}</div>
         <div class="card-voices-preview">
           ${historyMatch
-            ? `🕒 Продолжить: С${historyMatch.season}Э${historyMatch.episode} (${historyMatch.voice})`
-            : `🎙️ ${voicesList.slice(0, 2).join(', ')}`}
+            ? `Сезон ${historyMatch.season}, Серия ${historyMatch.episode} • ${historyMatch.voice}`
+            : `${voicesList.length} ${voicesList.length === 1 ? 'озвучка' : voicesList.length < 5 ? 'озвучки' : 'озвучек'}`}
         </div>
       </div>
     `;
 
-    card.addEventListener('click', () => openItemModal(item));
+    card.addEventListener('click', () => openItemModal(item, 'player'));
     catalogGrid.appendChild(card);
   }
 }
@@ -287,14 +332,14 @@ function getActiveEpisodeObj(item) {
 async function openItemModal(itemSummary, initialTab = 'player') {
   itemModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  incrementAdBlockCounter(4);
+  clearTvFocus();
 
   const savedHistory = state.history.find(h => h.imdbId === itemSummary.imdbId);
 
   modalTitle.textContent = itemSummary.title;
   modalOrigTitle.textContent = `${itemSummary.originalTitle || ''} (${itemSummary.yearRange || itemSummary.year || ''})`;
-  modalTypeBadge.textContent = TYPE_LABELS[itemSummary.type] || 'КИНО';
-  nowPlayingText.textContent = `⏳ Подключение прямого HLS-потока без рекламы для «${itemSummary.title}»...`;
+  modalTypeBadge.textContent = TYPE_LABELS[itemSummary.type] || 'Кино';
+  nowPlayingText.textContent = `Подключение потока: ${itemSummary.title}...`;
 
   try {
     const res = await fetch(`/api/details?imdb=${encodeURIComponent(itemSummary.imdbId)}&title=${encodeURIComponent(itemSummary.title)}`);
@@ -305,7 +350,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
       ...itemSummary,
       seasons: { 1: [{ season: 1, episode: 1, title: 'Основной поток', hlsUrl: '', voices: itemSummary.voices || ['Рус. Дублированный'] }] },
       qualities: ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
-      providers: [{ id: 'direct', name: 'СПБГУКА Direct HLS', badge: '1080p', speed: '110 Мбит/с' }]
+      providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
     };
   }
 
@@ -331,6 +376,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   populatePlayerControls(item);
   populateFilesTab(item);
   updateFavButtonState();
+  updateBalancerButtons();
   switchModalTab(initialTab);
   startPlayback(savedHistory?.currentTime || 0, true);
 }
@@ -338,7 +384,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
 function populateInfoTab(item) {
   modalTitle.textContent = item.title;
   modalOrigTitle.textContent = `${item.originalTitle || item.title} (${item.yearRange || item.year})`;
-  modalTypeBadge.textContent = TYPE_LABELS[item.type] || 'КИНО';
+  modalTypeBadge.textContent = TYPE_LABELS[item.type] || 'Кино';
 
   infoPoster.src = item.poster;
   infoRatingKp.textContent = item.ratingKp || '8.1';
@@ -349,52 +395,55 @@ function populateInfoTab(item) {
   infoDuration.textContent = item.duration || '120 мин';
   infoDirector.textContent = item.director || 'Не указан';
   infoCast.textContent = item.cast || 'Не указан';
-  infoIds.textContent = `IMDb: ${item.imdbId || '—'} | Кинопоиск ID: ${item.kpId || 'Авто-поиск'}`;
-  infoDescription.textContent = item.description || 'Описание загружается...';
+  infoIds.textContent = `IMDb: ${item.imdbId || '—'} • KP: ${item.kpId || '—'}`;
+  infoDescription.textContent = item.description || 'Описание отсутствует.';
 
   infoVoicesList.innerHTML = '';
   for (const v of (item.voices || [])) {
     const btn = document.createElement('button');
-    btn.className = 'chip-btn';
-    btn.textContent = `🎙️ ${v}`;
+    btn.className = 'chip-btn focusable';
+    btn.type = 'button';
+    btn.textContent = v;
     btn.addEventListener('click', () => {
       state.selectedVoice = v;
       populatePlayerControls(item);
       switchModalTab('player');
       switchAudioTrackOrRestart(v);
-      showPlayerOsd(`🎙️ Выбрана озвучка: ${v}`);
+      showPlayerOsd(`Озвучка: ${v}`);
     });
     infoVoicesList.appendChild(btn);
   }
 }
 
-// Switch audio track live in hls.js without reloading stream if already playing
+function isUsingHlsJs() {
+  return Boolean(hlsInstance && window.Hls && window.Hls.isSupported());
+}
+
+// Switch audio track seamlessly via hls.js or native HLS reload with ?audio=idx&singleAudio=1 (iPhone Safari / Smart TVs)
 function switchAudioTrackOrRestart(voiceName) {
   const item = state.currentItem;
   if (!item) return;
   const activeEp = getActiveEpisodeObj(item);
   const epVoices = activeEp?.voices || item.voices || [];
-  const voiceIdx = epVoices.indexOf(voiceName);
+  const voiceIdx = Math.max(0, epVoices.indexOf(voiceName));
 
-  if (state.selectedBalancer === 'direct' && hlsInstance && hlsInstance.audioTracks && hlsInstance.audioTracks.length > 0 && voiceIdx >= 0 && voiceIdx < hlsInstance.audioTracks.length) {
+  if (state.selectedBalancer === 'direct' && isUsingHlsJs() && hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
     hlsInstance.audioTrack = voiceIdx;
-    const epPart = (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon')
-      ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`
-      : '';
-    nowPlayingText.textContent = `${item.title}${epPart} • Озвучка: ${state.selectedVoice} • [${state.selectedQuality}]`;
+    const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+    const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
+    nowPlayingText.textContent = `${item.title}${epPart} • ${state.selectedVoice} • ${state.selectedQuality}`;
     addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, html5Video.currentTime || 0);
   } else {
     startPlayback(html5Video.currentTime || 0, true);
   }
 }
 
-// Switch quality level live in hls.js
 function switchQualityLevel(qualityLabel) {
   if (state.selectedBalancer === 'direct' && hlsInstance && hlsInstance.levels && hlsInstance.levels.length > 0) {
     if (qualityLabel.startsWith('Авто')) {
       hlsInstance.currentLevel = -1;
     } else {
-      const targetHeight = parseInt(qualityLabel, 10); // 1080, 720, 480, 360
+      const targetHeight = parseInt(qualityLabel, 10);
       let bestIdx = 0;
       let minDiff = Infinity;
       hlsInstance.levels.forEach((lvl, idx) => {
@@ -424,13 +473,14 @@ function populatePlayerControls(item) {
   voiceSelector.innerHTML = '';
   for (const voice of voices) {
     const btn = document.createElement('button');
-    btn.className = `chip-btn ${state.selectedVoice === voice ? 'active' : ''}`;
+    btn.className = `chip-btn focusable ${state.selectedVoice === voice ? 'active' : ''}`;
+    btn.type = 'button';
     btn.textContent = voice;
     btn.addEventListener('click', () => {
       state.selectedVoice = voice;
       populatePlayerControls(item);
       switchAudioTrackOrRestart(voice);
-      showPlayerOsd(`🎙️ Озвучка переключена: ${voice}`);
+      showPlayerOsd(`Озвучка: ${voice}`);
     });
     voiceSelector.appendChild(btn);
   }
@@ -440,13 +490,14 @@ function populatePlayerControls(item) {
   const qualities = item.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
   for (const q of qualities) {
     const btn = document.createElement('button');
-    btn.className = `chip-btn ${state.selectedQuality === q ? 'active' : ''}`;
-    btn.textContent = q;
+    btn.className = `chip-btn focusable ${state.selectedQuality === q ? 'active' : ''}`;
+    btn.type = 'button';
+    btn.textContent = q.replace('Авто (Макс. 1080p)', 'Авто').replace(' FHD', '').replace(' HD', '').replace(' SD', '');
     btn.addEventListener('click', () => {
       state.selectedQuality = q;
       populatePlayerControls(item);
       switchQualityLevel(q);
-      showPlayerOsd(`💎 Качество видео: ${q}`);
+      showPlayerOsd(`Качество: ${q}`);
     });
     qualitySelector.appendChild(btn);
   }
@@ -461,7 +512,8 @@ function populatePlayerControls(item) {
     seasonButtons.innerHTML = '';
     for (const sNum of seasonNums) {
       const sBtn = document.createElement('button');
-      sBtn.className = `chip-btn ${Number(state.selectedSeason) === sNum ? 'active' : ''}`;
+      sBtn.className = `chip-btn focusable ${Number(state.selectedSeason) === sNum ? 'active' : ''}`;
+      sBtn.type = 'button';
       sBtn.textContent = `Сезон ${sNum}`;
       sBtn.addEventListener('click', () => {
         state.selectedSeason = sNum;
@@ -470,7 +522,7 @@ function populatePlayerControls(item) {
         populatePlayerControls(item);
         populateFilesTab(item);
         startPlayback(0, true);
-        showPlayerOsd(`📁 Сезон ${sNum}, Серия ${firstEp} • ${state.selectedVoice}`);
+        showPlayerOsd(`Сезон ${sNum}, Серия ${firstEp}`);
       });
       seasonButtons.appendChild(sBtn);
     }
@@ -479,7 +531,8 @@ function populatePlayerControls(item) {
     const eps = seasonsObj[state.selectedSeason] || [];
     for (const ep of eps) {
       const epBtn = document.createElement('button');
-      epBtn.className = `ep-btn ${Number(state.selectedEpisode) === Number(ep.episode) ? 'active' : ''}`;
+      epBtn.className = `ep-btn focusable ${Number(state.selectedEpisode) === Number(ep.episode) ? 'active' : ''}`;
+      epBtn.type = 'button';
       epBtn.innerHTML = `
         <span class="ep-num">${ep.episode} серия</span>
         <span class="ep-name" title="${ep.title}">${ep.title}</span>
@@ -489,7 +542,7 @@ function populatePlayerControls(item) {
         populatePlayerControls(item);
         populateFilesTab(item);
         startPlayback(0, true);
-        showPlayerOsd(`▶ Сезон ${state.selectedSeason}, Серия ${ep.episode} • ${state.selectedVoice}`);
+        showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${ep.episode}`);
       });
       episodeButtons.appendChild(epBtn);
     }
@@ -501,7 +554,7 @@ function populatePlayerControls(item) {
 function populateFilesTab(item) {
   filesTreeContainer.innerHTML = '';
   const providers = item.providers || [
-    { id: 'direct', name: 'СПБГУКА Direct HLS (Без рекламы)', badge: '1080p FHD', speed: '120 Мбит/с' }
+    { id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '120 Мбит/с' }
   ];
   const activeEp = getActiveEpisodeObj(item);
   const voices = activeEp?.voices || item.voices || ['Рус. Дублированный'];
@@ -513,21 +566,20 @@ function populateFilesTab(item) {
 
     let rowsHtml = '';
     for (const voice of voices) {
-      const epLabel = (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon')
-        ? `Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`
-        : 'Полный фильм';
+      const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+      const epLabel = isEpisodic ? `Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : 'Полный фильм';
 
       const qButtonsHtml = qualities.map(q => `
-        <button class="chip-btn file-launch-btn" data-voice="${voice}" data-quality="${q}" data-prov="${prov.id}">
-          ▶ ${q}
+        <button class="chip-btn file-launch-btn focusable" type="button" data-voice="${voice}" data-quality="${q}" data-prov="${prov.id}">
+          ${q.replace('Авто (Макс. 1080p)', 'Авто')}
         </button>
       `).join('');
 
       rowsHtml += `
         <div class="file-stream-row">
           <div class="file-meta">
-            <span>🎬 <strong>${item.title}</strong> (${epLabel})</span>
-            <span class="file-voice-tag">🎙️ ${voice}</span>
+            <span><strong>${item.title}</strong> • ${epLabel}</span>
+            <span class="file-voice-tag">${voice}</span>
           </div>
           <div class="file-qualities">
             ${qButtonsHtml}
@@ -539,14 +591,12 @@ function populateFilesTab(item) {
     group.innerHTML = `
       <div class="provider-group-header">
         <div>
-          <strong>📡 ${prov.name}</strong>
-          <span style="margin-left:10px;font-size:0.78rem;color:var(--accent-green);">● ${prov.badge} (${prov.speed})</span>
+          <strong>${prov.name}</strong>
+          <span style="margin-left:8px;font-size:0.76rem;color:var(--ok);">${prov.badge}</span>
         </div>
-        <span class="mono" style="color:var(--text-muted);">HLS Stream: Ready</span>
+        <span class="mono" style="color:var(--text-muted);">${prov.speed}</span>
       </div>
-      <div class="provider-files-list">
-        ${rowsHtml}
-      </div>
+      <div class="provider-files-list">${rowsHtml}</div>
     `;
     filesTreeContainer.appendChild(group);
   }
@@ -560,7 +610,7 @@ function populateFilesTab(item) {
       populatePlayerControls(item);
       switchModalTab('player');
       startPlayback(0, true);
-      showPlayerOsd(`🚀 Запущен поток: ${state.selectedVoice} (${state.selectedQuality})`);
+      showPlayerOsd(`${state.selectedVoice} • ${state.selectedQuality}`);
     });
   });
 }
@@ -571,7 +621,7 @@ function showPlayerOsd(message) {
   if (osdTimeout) clearTimeout(osdTimeout);
   osdTimeout = setTimeout(() => {
     playerOsd.classList.add('hidden');
-  }, 3200);
+  }, 2800);
 }
 
 function updateBalancerButtons() {
@@ -579,6 +629,7 @@ function updateBalancerButtons() {
     btn.classList.toggle('active', btn.dataset.balancer === state.selectedBalancer);
   });
   customStreamRow.classList.toggle('hidden', state.selectedBalancer !== 'custom');
+  sandboxRow.classList.toggle('hidden', state.selectedBalancer === 'direct');
 }
 
 function destroyHls() {
@@ -599,40 +650,40 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
 
   addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, resumeSeconds);
 
-  const epPart = (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon')
-    ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`
-    : '';
-  nowPlayingText.textContent = `${item.title}${epPart} • Озвучка: ${state.selectedVoice} • [${state.selectedQuality}]`;
+  const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+  const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
+  nowPlayingText.textContent = `${item.title}${epPart} • ${state.selectedVoice} • ${state.selectedQuality}`;
 
-  // If Direct HLS mode is selected and we have a real parsed HLS URL for this episode/movie
+  // Direct HLS Stream
   if (state.selectedBalancer === 'direct' && activeEp && activeEp.hlsUrl) {
     iframePlayerWrap.classList.add('hidden');
     balancerIframe.src = 'about:blank';
     directPlayerWrap.classList.remove('hidden');
 
-    const targetHlsUrl = activeEp.hlsUrl;
+    const baseHlsUrl = activeEp.hlsUrl;
 
-    if (!forceReload && currentLoadedHlsUrl === targetHlsUrl && hlsInstance) {
-      if (hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
-        hlsInstance.audioTrack = voiceIdx;
-      }
-      switchQualityLevel(state.selectedQuality);
-      html5Video.play().catch(() => {});
-      return;
-    }
-
-    destroyHls();
-    currentLoadedHlsUrl = targetHlsUrl;
-    html5Video.poster = '';
-
+    // Prefer hls.js on PC, Linux, Android, webOS Chromium
     if (window.Hls && window.Hls.isSupported()) {
+      if (!forceReload && currentLoadedHlsUrl === baseHlsUrl && hlsInstance) {
+        if (hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
+          hlsInstance.audioTrack = voiceIdx;
+        }
+        switchQualityLevel(state.selectedQuality);
+        html5Video.play().catch(() => {});
+        return;
+      }
+
+      destroyHls();
+      currentLoadedHlsUrl = baseHlsUrl;
+      html5Video.poster = '';
+
       hlsInstance = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
         backBufferLength: 60
       });
 
-      hlsInstance.loadSource(targetHlsUrl);
+      hlsInstance.loadSource(`${baseHlsUrl}&audio=${voiceIdx}`);
       hlsInstance.attachMedia(html5Video);
 
       hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
@@ -651,17 +702,26 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
           hlsInstance.audioTrack = voiceIdx;
         }
       });
-    } else if (html5Video.canPlayType('application/vnd.apple.mpegurl')) {
-      html5Video.src = targetHlsUrl;
+      return;
+    }
+
+    // Native HLS fallback (iPhone / iPad Safari & older Smart TV browsers): singleAudio=1 forces chosen voiceover!
+    if (html5Video.canPlayType('application/vnd.apple.mpegurl')) {
+      destroyHls();
+      const nativeUrl = `${baseHlsUrl}&audio=${voiceIdx}&singleAudio=1`;
+      currentLoadedHlsUrl = nativeUrl;
+      html5Video.src = nativeUrl;
       html5Video.addEventListener('loadedmetadata', () => {
-        if (resumeSeconds > 2) html5Video.currentTime = resumeSeconds;
+        if (resumeSeconds > 2) {
+          try { html5Video.currentTime = resumeSeconds; } catch (e) {}
+        }
         html5Video.play().catch(() => {});
       }, { once: true });
+      return;
     }
-    return;
   }
 
-  // Fallback or explicit External Web Balancers (Namy / Kinogram / VidSrc)
+  // Fallback or External Web Balancers
   destroyHls();
   html5Video.pause();
   html5Video.removeAttribute('src');
@@ -673,26 +733,16 @@ function startPlayback(resumeSeconds = 0, forceReload = false) {
   applyIframeSandbox();
 
   const idPath = item.kpId ? `/embed/kp/${encodeURIComponent(item.kpId)}` : `/embed/imdb/${encodeURIComponent(item.imdbId)}`;
+  const seasonParams = isEpisodic ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
 
   if (state.selectedBalancer === 'namy' || (state.selectedBalancer === 'direct' && !activeEp?.hlsUrl)) {
-    const seasonParams = (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon')
-      ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}`
-      : '';
     balancerIframe.src = `https://api.namy.ws${idPath}${seasonParams}`;
-    showPlayerOsd(`🌐 Подключён балансер Collaps / Namy`);
   } else if (state.selectedBalancer === 'kinogram') {
-    const seasonParams = (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon')
-      ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}`
-      : '';
     balancerIframe.src = `https://api.kinogram.best${idPath}${seasonParams}`;
-    showPlayerOsd(`🎬 Подключён балансер Kinogram Mirror`);
   } else if (state.selectedBalancer === 'vidsrc') {
-    const isTv = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
-    const embedUrl = isTv
+    balancerIframe.src = isEpisodic
       ? `https://vidsrc.su/embed/tv/${encodeURIComponent(item.imdbId)}/${state.selectedSeason}/${state.selectedEpisode}`
       : `https://vidsrc.su/embed/movie/${encodeURIComponent(item.imdbId)}`;
-    balancerIframe.src = embedUrl;
-    showPlayerOsd(`🌍 Подключён балансер VidSrc.su (С${state.selectedSeason}Э${state.selectedEpisode})`);
   } else if (state.selectedBalancer === 'custom') {
     const customUrl = customStreamInput.value.trim();
     if (!customUrl) return;
@@ -738,25 +788,124 @@ function closeItemModal() {
   balancerIframe.src = 'about:blank';
   itemModal.classList.add('hidden');
   document.body.style.overflow = '';
+  clearTvFocus();
 }
 
 function updateFavButtonState() {
   if (!state.currentItem) return;
   const isFav = state.favorites.some(f => f.imdbId === state.currentItem.imdbId);
-  modalFavBtn.textContent = isFav ? '★ В избранном' : '☆ В избранное';
-  modalFavBtn.style.borderColor = isFav ? 'var(--accent-gold)' : '';
-  modalFavBtn.style.color = isFav ? 'var(--accent-gold)' : '';
+  modalFavBtn.textContent = isFav ? 'В избранном' : 'В избранное';
+  modalFavBtn.style.background = isFav ? 'var(--accent)' : '';
+  modalFavBtn.style.color = isFav ? 'var(--accent-ink)' : '';
+}
+
+function toggleVideoFullscreen() {
+  const target = directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : html5Video;
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  } else if (target.requestFullscreen) {
+    target.requestFullscreen().catch(() => {});
+  } else if (html5Video.webkitEnterFullscreen) {
+    // iPhone Safari native video fullscreen
+    html5Video.webkitEnterFullscreen();
+  }
+}
+
+// Spatial TV D-Pad Navigation (LG webOS / Samsung Tizen / HTPC Linux)
+function clearTvFocus() {
+  if (currentTvFocusedEl) {
+    currentTvFocusedEl.classList.remove('tv-focus');
+    currentTvFocusedEl = null;
+  }
+}
+
+function getVisibleFocusableElements() {
+  const scope = !parsersModal.classList.contains('hidden')
+    ? parsersModal
+    : (!itemModal.classList.contains('hidden') ? itemModal : document.body);
+
+  return Array.from(scope.querySelectorAll('.focusable')).filter(el => {
+    if (el.offsetParent === null) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+}
+
+function moveSpatialFocus(direction) {
+  const candidates = getVisibleFocusableElements();
+  if (candidates.length === 0) return;
+
+  if (!currentTvFocusedEl || !candidates.includes(currentTvFocusedEl)) {
+    const activeEl = document.activeElement;
+    currentTvFocusedEl = candidates.includes(activeEl) ? activeEl : candidates[0];
+    currentTvFocusedEl.classList.add('tv-focus');
+    currentTvFocusedEl.focus({ preventScroll: true });
+    currentTvFocusedEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return;
+  }
+
+  const curRect = currentTvFocusedEl.getBoundingClientRect();
+  const curCx = curRect.left + curRect.width / 2;
+  const curCy = curRect.top + curRect.height / 2;
+
+  let bestEl = null;
+  let bestScore = Infinity;
+
+  for (const el of candidates) {
+    if (el === currentTvFocusedEl) continue;
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const dx = cx - curCx;
+    const dy = cy - curCy;
+
+    let valid = false;
+    let primaryDist = 0;
+    let secondaryDist = 0;
+
+    if (direction === 'ArrowRight' && dx > 12) {
+      valid = true;
+      primaryDist = dx;
+      secondaryDist = Math.abs(dy);
+    } else if (direction === 'ArrowLeft' && dx < -12) {
+      valid = true;
+      primaryDist = -dx;
+      secondaryDist = Math.abs(dy);
+    } else if (direction === 'ArrowDown' && dy > 12) {
+      valid = true;
+      primaryDist = dy;
+      secondaryDist = Math.abs(dx);
+    } else if (direction === 'ArrowUp' && dy < -12) {
+      valid = true;
+      primaryDist = -dy;
+      secondaryDist = Math.abs(dx);
+    }
+
+    if (!valid) continue;
+    const score = primaryDist + secondaryDist * 2.2;
+    if (score < bestScore) {
+      bestScore = score;
+      bestEl = el;
+    }
+  }
+
+  if (bestEl) {
+    currentTvFocusedEl.classList.remove('tv-focus');
+    currentTvFocusedEl = bestEl;
+    currentTvFocusedEl.classList.add('tv-focus');
+    currentTvFocusedEl.focus({ preventScroll: true });
+    currentTvFocusedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  }
 }
 
 // Event Listeners
-document.querySelectorAll('.nav-item').forEach(btn => {
+document.querySelectorAll('.nav-item, .mob-nav-item').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
     state.category = btn.dataset.category;
     state.searchQuery = '';
     searchInput.value = '';
     clearSearchBtn.classList.add('hidden');
+    syncCategoryButtons(state.category);
     loadCatalog();
   });
 });
@@ -786,6 +935,7 @@ searchForm.addEventListener('submit', e => {
   state.searchQuery = searchInput.value.trim();
   clearSearchBtn.classList.toggle('hidden', !state.searchQuery);
   loadCatalog();
+  searchInput.blur();
 });
 
 searchInput.addEventListener('input', () => {
@@ -799,16 +949,6 @@ clearSearchBtn.addEventListener('click', () => {
   loadCatalog();
 });
 
-document.querySelectorAll('.quick-tag').forEach(tag => {
-  tag.addEventListener('click', () => {
-    const q = tag.dataset.query;
-    searchInput.value = q;
-    state.searchQuery = q;
-    clearSearchBtn.classList.remove('hidden');
-    loadCatalog();
-  });
-});
-
 document.getElementById('sidebarToggle').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('collapsed');
 });
@@ -820,8 +960,16 @@ document.getElementById('brandLogo').addEventListener('click', e => {
   state.searchQuery = '';
   searchInput.value = '';
   clearSearchBtn.classList.add('hidden');
-  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.category === 'all'));
+  syncCategoryButtons('all');
   loadCatalog();
+});
+
+heroWatchBtn.addEventListener('click', () => {
+  if (state.featuredItem) openItemModal(state.featuredItem, 'player');
+});
+
+heroInfoBtn.addEventListener('click', () => {
+  if (state.featuredItem) openItemModal(state.featuredItem, 'info');
 });
 
 continuePlayBtn.addEventListener('click', () => {
@@ -840,12 +988,6 @@ closeModalBtn.addEventListener('click', closeItemModal);
 
 itemModal.addEventListener('click', e => {
   if (e.target === itemModal) closeItemModal();
-});
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !itemModal.classList.contains('hidden')) {
-    closeItemModal();
-  }
 });
 
 modalFavBtn.addEventListener('click', () => {
@@ -884,7 +1026,7 @@ prevEpBtn.addEventListener('click', () => {
     populatePlayerControls(state.currentItem);
     populateFilesTab(state.currentItem);
     startPlayback(0, true);
-    showPlayerOsd(`⏮ Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
+    showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
   }
 });
 
@@ -897,24 +1039,26 @@ nextEpBtn.addEventListener('click', () => {
     populatePlayerControls(state.currentItem);
     populateFilesTab(state.currentItem);
     startPlayback(0, true);
-    showPlayerOsd(`⏭ Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
+    showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
   }
 });
 
 playbackSpeedSelect.addEventListener('change', e => {
   html5Video.playbackRate = parseFloat(e.target.value);
-  showPlayerOsd(`⏩ Скорость воспроизведения: ${e.target.value}x`);
+  showPlayerOsd(`Скорость: ${e.target.value}x`);
 });
 
 pipBtn.addEventListener('click', async () => {
   try {
     if (document.pictureInPictureElement) {
       await document.exitPictureInPicture();
-    } else {
+    } else if (html5Video.requestPictureInPicture) {
       await html5Video.requestPictureInPicture();
     }
   } catch (e) {}
 });
+
+fullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
 html5Video.addEventListener('ended', () => {
   if (!state.currentItem) return;
@@ -925,23 +1069,107 @@ html5Video.addEventListener('ended', () => {
     populatePlayerControls(state.currentItem);
     populateFilesTab(state.currentItem);
     startPlayback(0, true);
-    showPlayerOsd(`▶ Автопереход: Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
+    showPlayerOsd(`Автопереход: Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
   }
 });
 
 refreshParsersBtn.addEventListener('click', () => {
-  if (!state.currentItem) return;
-  incrementAdBlockCounter(5);
-  populateFilesTab(state.currentItem);
+  if (state.currentItem) populateFilesTab(state.currentItem);
 });
 
 parsersStatusBtn.addEventListener('click', () => parsersModal.classList.remove('hidden'));
-adShieldBtn.addEventListener('click', () => parsersModal.classList.remove('hidden'));
 closeParsersModalBtn.addEventListener('click', () => parsersModal.classList.add('hidden'));
 parsersModal.addEventListener('click', e => {
   if (e.target === parsersModal) parsersModal.classList.add('hidden');
 });
 
-// Initialize App
+// Global Keyboard & Smart TV Remote Control (webOS Back=461, Tizen Back=10009, Media Keys)
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+  // Quick search focus
+  if (e.key === '/' && !isTyping && itemModal.classList.contains('hidden')) {
+    e.preventDefault();
+    searchInput.focus();
+    return;
+  }
+
+  // Back / Escape handling (PC Escape, LG webOS 461, Samsung Tizen 10009)
+  if (e.key === 'Escape' || e.keyCode === 461 || e.keyCode === 10009) {
+    if (!parsersModal.classList.contains('hidden')) {
+      e.preventDefault();
+      parsersModal.classList.add('hidden');
+      return;
+    }
+    if (!itemModal.classList.contains('hidden')) {
+      e.preventDefault();
+      closeItemModal();
+      return;
+    }
+  }
+
+  // Media Player Controls (Play/Pause, Seek, Fullscreen)
+  if (!itemModal.classList.contains('hidden') && state.activeTab === 'player' && !isTyping) {
+    if (e.key === ' ' || e.key === 'k' || e.key === 'MediaPlayPause' || e.keyCode === 179) {
+      if (document.activeElement?.tagName !== 'BUTTON') {
+        e.preventDefault();
+        if (html5Video.paused) html5Video.play().catch(() => {});
+        else html5Video.pause();
+        return;
+      }
+    }
+    if (e.keyCode === 415) { // TV Play
+      e.preventDefault();
+      html5Video.play().catch(() => {});
+      return;
+    }
+    if (e.keyCode === 19) { // TV Pause
+      e.preventDefault();
+      html5Video.pause();
+      return;
+    }
+    if (e.keyCode === 417) { // TV FastForward
+      e.preventDefault();
+      html5Video.currentTime = Math.min(html5Video.duration || 0, (html5Video.currentTime || 0) + 15);
+      showPlayerOsd('+15 сек');
+      return;
+    }
+    if (e.keyCode === 412) { // TV Rewind
+      e.preventDefault();
+      html5Video.currentTime = Math.max(0, (html5Video.currentTime || 0) - 15);
+      showPlayerOsd('-15 сек');
+      return;
+    }
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleVideoFullscreen();
+      return;
+    }
+  }
+
+  // D-Pad Arrow Key Spatial Navigation
+  if (!isTyping && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+    // If video itself is focused and user presses left/right, seek 10s
+    if (document.activeElement === html5Video && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      return;
+    }
+    e.preventDefault();
+    moveSpatialFocus(e.key);
+    return;
+  }
+
+  if (!isTyping && e.key === 'Enter' && currentTvFocusedEl) {
+    if (document.activeElement !== currentTvFocusedEl) {
+      e.preventDefault();
+      currentTvFocusedEl.click();
+    }
+  }
+});
+
+// Clear TV focus highlight when user switches to mouse/touch
+document.addEventListener('pointerdown', clearTvFocus);
+
+// Initialize
 updateBadges();
 loadCatalog();
