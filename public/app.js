@@ -30,6 +30,13 @@ let searchDebounceTimer = null;
 let lastHistorySaveTs = 0;
 let filesTabDirty = true;
 let osdTimeout = null;
+let overlayControlsTimer = null;
+let seekFeedbackTimer = null;
+let seekStreakDir = 0;
+let seekStreakTotal = 0;
+let seekStreakTimer = null;
+let lastTouchTapTime = 0;
+let lastTouchTapSide = 0;
 let currentTvFocusedEl = null;
 
 const clientStreamCache = new Map();
@@ -378,9 +385,22 @@ const nextEpBtn = document.getElementById('nextEpBtn');
 
 const playerOsd = document.getElementById('playerOsd');
 const directPlayerWrap = document.getElementById('directPlayerWrap');
+const videoStageArea = document.getElementById('videoStageArea');
 const html5Video = document.getElementById('html5Video');
+const seekFeedbackLeft = document.getElementById('seekFeedbackLeft');
+const seekFeedbackLeftText = document.getElementById('seekFeedbackLeftText');
+const seekFeedbackRight = document.getElementById('seekFeedbackRight');
+const seekFeedbackRightText = document.getElementById('seekFeedbackRightText');
+const videoSmartOverlay = document.getElementById('videoSmartOverlay');
+const overlay120Group = document.getElementById('overlay120Group');
+const overlayRewind120Btn = document.getElementById('overlayRewind120Btn');
+const overlayForward120Btn = document.getElementById('overlayForward120Btn');
+const overlayNextEpBtn = document.getElementById('overlayNextEpBtn');
+const overlayNextEpText = document.getElementById('overlayNextEpText');
 const nowPlayingText = document.getElementById('nowPlayingText');
 const restartVideoBtn = document.getElementById('restartVideoBtn');
+const rewind120Btn = document.getElementById('rewind120Btn');
+const skip120Btn = document.getElementById('skip120Btn');
 const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
 const pipBtn = document.getElementById('pipBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
@@ -854,6 +874,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   updateFavButtonState();
   updateBalancerButtons();
   startPlayback(savedHistory?.currentTime || 0, true);
+  revealVideoOverlayControls(3200);
 }
 
 function populateInfoTab(item) {
@@ -1130,6 +1151,125 @@ function showPlayerOsd(message) {
   }, 2800);
 }
 
+function getAdjacentEpisodeTarget(delta) {
+  const item = state.currentItem;
+  if (!item || !item.seasons) return null;
+  const seasonNums = Object.keys(item.seasons).map(Number).sort((a, b) => a - b);
+  const curSeason = Number(state.selectedSeason);
+  const curSeasonIdx = seasonNums.indexOf(curSeason);
+  if (curSeasonIdx === -1) return null;
+
+  const eps = item.seasons[curSeason] || [];
+  const curEpIdx = eps.findIndex(e => Number(e.episode) === Number(state.selectedEpisode));
+  if (curEpIdx === -1) return null;
+
+  const nextEpIdx = curEpIdx + delta;
+  if (nextEpIdx >= 0 && nextEpIdx < eps.length) {
+    return {
+      season: curSeason,
+      episode: eps[nextEpIdx].episode,
+      title: eps[nextEpIdx].title || ''
+    };
+  }
+
+  if (delta > 0 && curSeasonIdx + 1 < seasonNums.length) {
+    const nextSeason = seasonNums[curSeasonIdx + 1];
+    const nextSeasonEps = item.seasons[nextSeason] || [];
+    if (nextSeasonEps.length > 0) {
+      return {
+        season: nextSeason,
+        episode: nextSeasonEps[0].episode,
+        title: nextSeasonEps[0].title || ''
+      };
+    }
+  }
+
+  if (delta < 0 && curSeasonIdx > 0) {
+    const prevSeason = seasonNums[curSeasonIdx - 1];
+    const prevSeasonEps = item.seasons[prevSeason] || [];
+    if (prevSeasonEps.length > 0) {
+      const lastEp = prevSeasonEps[prevSeasonEps.length - 1];
+      return {
+        season: prevSeason,
+        episode: lastEp.episode,
+        title: lastEp.title || ''
+      };
+    }
+  }
+
+  return null;
+}
+
+function updateSmartVideoOverlay() {
+  if (!overlay120Group || !overlayNextEpBtn) return;
+  const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
+  const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
+  const isFirstHalf = (dur === 0) || (cur <= dur * 0.5);
+  overlay120Group.classList.toggle('hidden', !isFirstHalf);
+
+  const remaining = dur > 0 ? (dur - cur) : Infinity;
+  const nextTarget = getAdjacentEpisodeTarget(1);
+  const showNextEp = !isFirstHalf && dur > 0 && remaining <= 180 && Boolean(nextTarget);
+  overlayNextEpBtn.classList.toggle('hidden', !showNextEp);
+  if (showNextEp && overlayNextEpText && nextTarget) {
+    overlayNextEpText.textContent = `Следующая серия (С${nextTarget.season} Е${nextTarget.episode}) ⏭`;
+  }
+}
+
+function revealVideoOverlayControls(timeoutMs = 3200) {
+  if (!videoStageArea) return;
+  videoStageArea.classList.add('controls-active');
+  updateSmartVideoOverlay();
+  if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
+  overlayControlsTimer = setTimeout(() => {
+    if (!html5Video.paused) {
+      videoStageArea.classList.remove('controls-active');
+    }
+  }, timeoutMs);
+}
+
+function seekRelative(deltaSeconds) {
+  if (!html5Video) return;
+  const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
+  const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : Infinity;
+  const target = Math.max(0, Math.min(dur, cur + deltaSeconds));
+  html5Video.currentTime = target;
+
+  const dir = deltaSeconds < 0 ? -1 : 1;
+  if (Math.abs(deltaSeconds) < 60 && seekStreakDir === dir) {
+    seekStreakTotal += deltaSeconds;
+  } else {
+    seekStreakDir = dir;
+    seekStreakTotal = deltaSeconds;
+  }
+
+  if (seekStreakTimer) clearTimeout(seekStreakTimer);
+  seekStreakTimer = setTimeout(() => {
+    seekStreakDir = 0;
+    seekStreakTotal = 0;
+  }, 750);
+
+  const sign = seekStreakTotal > 0 ? '+' : '';
+  const text = `${sign}${seekStreakTotal} сек`;
+
+  if (seekFeedbackLeft && seekFeedbackRight && seekFeedbackLeftText && seekFeedbackRightText) {
+    seekFeedbackLeft.classList.toggle('hidden', dir !== -1);
+    seekFeedbackRight.classList.toggle('hidden', dir !== 1);
+    if (dir === -1) seekFeedbackLeftText.textContent = text;
+    else seekFeedbackRightText.textContent = text;
+
+    if (seekFeedbackTimer) clearTimeout(seekFeedbackTimer);
+    seekFeedbackTimer = setTimeout(() => {
+      seekFeedbackLeft.classList.add('hidden');
+      seekFeedbackRight.classList.add('hidden');
+    }, 850);
+  }
+
+  showPlayerOsd(text);
+  revealVideoOverlayControls();
+  saveLivePlaybackProgress();
+}
+
 function updateBalancerButtons() {
   balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.balancer === state.selectedBalancer);
@@ -1346,6 +1486,13 @@ function closeItemModal() {
   saveLivePlaybackProgress();
   modalOpenToken++;
   playbackRequestToken++;
+  if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
+  if (seekFeedbackTimer) clearTimeout(seekFeedbackTimer);
+  if (seekStreakTimer) clearTimeout(seekStreakTimer);
+  seekStreakDir = 0;
+  seekStreakTotal = 0;
+  if (seekFeedbackLeft) seekFeedbackLeft.classList.add('hidden');
+  if (seekFeedbackRight) seekFeedbackRight.classList.add('hidden');
   destroyHls();
   html5Video.pause();
   balancerIframe.removeAttribute('srcdoc');
@@ -1367,11 +1514,15 @@ function updateFavButtonState() {
 }
 
 function toggleVideoFullscreen() {
-  const target = directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : html5Video;
+  const target = directPlayerWrap.classList.contains('hidden')
+    ? iframePlayerWrap
+    : (videoStageArea || html5Video);
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
   } else if (target.requestFullscreen) {
-    target.requestFullscreen().catch(() => {});
+    target.requestFullscreen().catch(() => {
+      if (html5Video.webkitEnterFullscreen) html5Video.webkitEnterFullscreen();
+    });
   } else if (html5Video.webkitEnterFullscreen) {
     // iPhone Safari native video fullscreen
     html5Video.webkitEnterFullscreen();
@@ -1667,20 +1818,36 @@ sandboxToggle.addEventListener('change', () => {
 
 function switchEpisodeStep(delta, osdPrefix = '') {
   if (!state.currentItem) return;
-  const eps = (state.currentItem.seasons && state.currentItem.seasons[state.selectedSeason]) || [];
-  const curIdx = eps.findIndex(e => Number(e.episode) === Number(state.selectedEpisode));
-  const nextIdx = curIdx + delta;
-  if (curIdx < 0 || nextIdx < 0 || nextIdx >= eps.length) return;
-  state.selectedEpisode = eps[nextIdx].episode;
+  const target = getAdjacentEpisodeTarget(delta);
+  if (!target) return;
+  state.selectedSeason = target.season;
+  state.selectedEpisode = target.episode;
   populatePlayerControls(state.currentItem);
   markFilesTabDirtyOrRefresh(state.currentItem);
   startPlayback(0, true);
+  revealVideoOverlayControls(3200);
   const label = `Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`;
   showPlayerOsd(osdPrefix ? `${osdPrefix}: ${label}` : label);
 }
 
 prevEpBtn.addEventListener('click', () => switchEpisodeStep(-1));
 nextEpBtn.addEventListener('click', () => switchEpisodeStep(1));
+
+if (overlayForward120Btn) {
+  overlayForward120Btn.addEventListener('click', () => seekRelative(120));
+}
+if (overlayRewind120Btn) {
+  overlayRewind120Btn.addEventListener('click', () => seekRelative(-120));
+}
+if (skip120Btn) {
+  skip120Btn.addEventListener('click', () => seekRelative(120));
+}
+if (rewind120Btn) {
+  rewind120Btn.addEventListener('click', () => seekRelative(-120));
+}
+if (overlayNextEpBtn) {
+  overlayNextEpBtn.addEventListener('click', () => switchEpisodeStep(1, 'Следующая серия'));
+}
 
 playbackSpeedSelect.addEventListener('change', e => {
   html5Video.playbackRate = parseFloat(e.target.value);
@@ -1700,6 +1867,7 @@ pipBtn.addEventListener('click', async () => {
 fullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
 html5Video.addEventListener('timeupdate', () => {
+  updateSmartVideoOverlay();
   const now = Date.now();
   if (now - lastHistorySaveTs >= 5000) {
     lastHistorySaveTs = now;
@@ -1707,7 +1875,19 @@ html5Video.addEventListener('timeupdate', () => {
   }
 });
 
+['loadedmetadata', 'durationchange', 'seeked'].forEach(evt => {
+  html5Video.addEventListener(evt, updateSmartVideoOverlay);
+});
+
+html5Video.addEventListener('play', () => {
+  updateSmartVideoOverlay();
+  revealVideoOverlayControls(2800);
+});
+
 html5Video.addEventListener('pause', () => {
+  updateSmartVideoOverlay();
+  if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
+  if (videoStageArea) videoStageArea.classList.add('controls-active');
   saveLivePlaybackProgress();
 });
 
@@ -1715,6 +1895,55 @@ html5Video.addEventListener('ended', () => {
   saveLivePlaybackProgress();
   switchEpisodeStep(1, 'Автопереход');
 });
+
+if (videoStageArea) {
+  videoStageArea.addEventListener('mousemove', () => revealVideoOverlayControls());
+  videoStageArea.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'touch') revealVideoOverlayControls();
+  });
+  videoStageArea.addEventListener('touchstart', () => revealVideoOverlayControls(), { passive: true });
+
+  videoStageArea.addEventListener('touchend', e => {
+    if (e.target.closest('.video-smart-overlay')) return;
+    const rect = videoStageArea.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const touch = e.changedTouches && e.changedTouches[0];
+    if (!touch) return;
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    // Ignore taps on bottom native controls strip
+    if (y > rect.height - 54) return;
+    const xRatio = x / rect.width;
+    const side = xRatio < 0.4 ? -1 : (xRatio > 0.6 ? 1 : 0);
+    if (side === 0) return;
+
+    const now = Date.now();
+    const windowMs = seekStreakDir === side ? 650 : 320;
+    if (lastTouchTapSide === side && (now - lastTouchTapTime) <= windowMs) {
+      if (e.cancelable) e.preventDefault();
+      seekRelative(side * 5);
+      lastTouchTapTime = now;
+      lastTouchTapSide = side;
+    } else {
+      lastTouchTapTime = now;
+      lastTouchTapSide = side;
+    }
+  }, { passive: false });
+
+  videoStageArea.addEventListener('dblclick', e => {
+    if (e.target.closest('.video-smart-overlay')) return;
+    const rect = videoStageArea.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (y > rect.height - 54) return;
+    const xRatio = x / rect.width;
+    if (xRatio < 0.35 || xRatio > 0.65) {
+      e.preventDefault();
+      seekRelative(xRatio < 0.5 ? -5 : 5);
+    }
+  });
+}
 
 refreshParsersBtn.addEventListener('click', () => {
   if (state.currentItem) {
@@ -1728,6 +1957,24 @@ closeParsersModalBtn.addEventListener('click', () => parsersModal.classList.add(
 parsersModal.addEventListener('click', e => {
   if (e.target === parsersModal) parsersModal.classList.add('hidden');
 });
+
+// Capture-phase ArrowLeft/ArrowRight 5s seek when direct player is active on PC
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const tag = document.activeElement?.tagName;
+  const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  if (isTyping) return;
+  if (
+    !itemModal.classList.contains('hidden') &&
+    state.activeTab === 'player' &&
+    !directPlayerWrap.classList.contains('hidden') &&
+    !currentTvFocusedEl
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    seekRelative(e.key === 'ArrowRight' ? 5 : -5);
+  }
+}, true);
 
 // Global Keyboard & Smart TV Remote Control (webOS Back=461, Tizen Back=10009, Media Keys)
 document.addEventListener('keydown', e => {

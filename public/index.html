@@ -14,7 +14,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-  <link rel="stylesheet" href="/styles.css?v=5" />
+  <link rel="stylesheet" href="/styles.css?v=6" />
 </head>
 <body>
   <!-- Top Header -->
@@ -358,15 +358,43 @@
             <div id="playerOsd" class="player-osd hidden"></div>
 
             <div id="directPlayerWrap" class="direct-player-wrap">
-              <video
-                id="html5Video"
-                class="html5-video"
-                controls
-                playsinline
-                webkit-playsinline
-                x-webkit-airplay="allow"
-                preload="auto"
-              ></video>
+              <div id="videoStageArea" class="video-stage-area controls-active">
+                <video
+                  id="html5Video"
+                  class="html5-video"
+                  controls
+                  playsinline
+                  webkit-playsinline
+                  x-webkit-airplay="allow"
+                  preload="auto"
+                ></video>
+
+                <!-- Double-tap / Arrow 5s Visual Feedback Overlays -->
+                <div id="seekFeedbackLeft" class="seek-feedback seek-feedback-left hidden" aria-hidden="true">
+                  <span class="seek-feedback-arrows">«</span>
+                  <span id="seekFeedbackLeftText" class="seek-feedback-text">-5 сек</span>
+                </div>
+                <div id="seekFeedbackRight" class="seek-feedback seek-feedback-right hidden" aria-hidden="true">
+                  <span class="seek-feedback-arrows">»</span>
+                  <span id="seekFeedbackRightText" class="seek-feedback-text">+5 сек</span>
+                </div>
+
+                <!-- Smart Right-Side Video Overlay (1st half: 120s skip/rewind; <=3 min left: Next Episode) -->
+                <div id="videoSmartOverlay" class="video-smart-overlay">
+                  <div id="overlay120Group" class="overlay-120-group">
+                    <button id="overlayRewind120Btn" class="video-smart-btn video-smart-btn-sub focusable" type="button" title="Отмотать на 120 секунд назад">
+                      <span>↺ -120 сек</span>
+                    </button>
+                    <button id="overlayForward120Btn" class="video-smart-btn focusable" type="button" title="Перемотать на 120 секунд вперёд">
+                      <span>+120 сек ⏭</span>
+                    </button>
+                  </div>
+                  <button id="overlayNextEpBtn" class="video-smart-btn video-next-ep-btn focusable hidden" type="button" title="Переключить на следующую серию">
+                    <span class="next-ep-btn-kicker">Далее по порядку</span>
+                    <span id="overlayNextEpText" class="next-ep-btn-label">Следующая серия ⏭</span>
+                  </button>
+                </div>
+              </div>
               <div class="player-status-bar">
                 <div class="now-playing-label">
                   <span class="live-indicator">DIRECT HLS</span>
@@ -374,6 +402,8 @@
                 </div>
                 <div class="player-tools">
                   <button id="restartVideoBtn" class="btn-ghost btn-xs focusable" type="button" title="Смотреть с начала">С начала</button>
+                  <button id="rewind120Btn" class="btn-ghost btn-xs focusable" type="button" title="Отмотать на 120 секунд назад">-120 сек</button>
+                  <button id="skip120Btn" class="btn-ghost btn-xs focusable" type="button" title="Перемотать на 120 секунд вперёд">+120 сек</button>
                   <label class="speed-control">
                     <span>Скорость</span>
                     <select id="playbackSpeedSelect" class="speed-select focusable">
@@ -575,6 +605,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=5"></script>
+  <script src="/app.js?v=6"></script>
 </body>
 </html>
