@@ -2124,3 +2124,64 @@ body {
     font-size: 0.8rem;
   }
 }
+
+/* LG webOS / Smart TV Performance Mode (Zero expensive shadows, gradients, or GPU-thrashing transitions) */
+html.tv-mode body {
+  background-image: none;
+}
+
+html.tv-mode .topbar,
+html.tv-mode .brand-mark,
+html.tv-mode .search-box,
+html.tv-mode .search-submit-btn,
+html.tv-mode .status-dot,
+html.tv-mode .sidebar-sources-card,
+html.tv-mode .hero-banner,
+html.tv-mode .hero-pill-brand,
+html.tv-mode .continue-card,
+html.tv-mode .genre-pill.active,
+html.tv-mode .card-poster-wrap,
+html.tv-mode .play-circle,
+html.tv-mode .modal-window,
+html.tv-mode .hdvb-tab.active,
+html.tv-mode .video-stage,
+html.tv-mode .seek-feedback,
+html.tv-mode .video-smart-btn,
+html.tv-mode .video-next-ep-btn,
+html.tv-mode .deck-section,
+html.tv-mode .chip-btn.active,
+html.tv-mode .ep-btn.active,
+html.tv-mode .btn-primary {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html.tv-mode .movie-card,
+html.tv-mode .card-poster,
+html.tv-mode .card-poster-wrap,
+html.tv-mode .card-play-hover,
+html.tv-mode .play-circle,
+html.tv-mode .hero-backdrop,
+html.tv-mode .continue-card,
+html.tv-mode .modal-window,
+html.tv-mode .overlay-120-group,
+html.tv-mode .btn-primary {
+  transition: none !important;
+}
+
+html.tv-mode .movie-card:hover,
+html.tv-mode .movie-card:hover .card-poster,
+html.tv-mode .hero-banner:hover .hero-backdrop,
+html.tv-mode .continue-card:hover,
+html.tv-mode .btn-primary:hover {
+  transform: none !important;
+}
+
+html.tv-mode .movie-card {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
+}
+
+html.tv-mode .card-play-hover {
+  display: none;
+}

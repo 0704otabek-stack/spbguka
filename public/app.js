@@ -1,5 +1,11 @@
 // СПБГУКА — Cross-Platform Cinema App (PC, Linux, Android, iOS Safari, LG webOS Smart TV)
 
+const isSmartTv = /web0s|webos|tizen|smart-tv|smarttv|netcast|lg browser|viera|hisense|philips/i.test(navigator.userAgent) ||
+  new URLSearchParams(window.location.search).get('tv') === '1';
+if (isSmartTv) {
+  document.documentElement.classList.add('tv-mode');
+}
+
 const state = {
   category: 'all',
   genre: 'all',
@@ -37,6 +43,8 @@ let seekStreakTotal = 0;
 let seekStreakTimer = null;
 let lastTouchTapTime = 0;
 let lastTouchTapSide = 0;
+let lastSmartOverlayKey = '';
+let lastOverlayRevealTs = 0;
 let currentTvFocusedEl = null;
 
 const clientStreamCache = new Map();
@@ -1067,7 +1075,7 @@ function populatePlayerControls(item) {
 
     requestAnimationFrame(() => {
       episodeButtons.querySelector('.ep-btn.active')?.scrollIntoView({
-        behavior: 'smooth',
+        behavior: isSmartTv ? 'auto' : 'smooth',
         block: 'nearest',
         inline: 'center'
       });
@@ -1205,11 +1213,15 @@ function updateSmartVideoOverlay() {
   const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
   const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
   const isFirstHalf = (dur === 0) || (cur <= dur * 0.5);
-  overlay120Group.classList.toggle('hidden', !isFirstHalf);
 
   const remaining = dur > 0 ? (dur - cur) : Infinity;
   const nextTarget = getAdjacentEpisodeTarget(1);
   const showNextEp = !isFirstHalf && dur > 0 && remaining <= 180 && Boolean(nextTarget);
+  const key = `${isFirstHalf ? 1 : 0}|${showNextEp ? 1 : 0}|${nextTarget ? `${nextTarget.season}:${nextTarget.episode}` : ''}`;
+  if (key === lastSmartOverlayKey) return;
+  lastSmartOverlayKey = key;
+
+  overlay120Group.classList.toggle('hidden', !isFirstHalf);
   overlayNextEpBtn.classList.toggle('hidden', !showNextEp);
   if (showNextEp && overlayNextEpText && nextTarget) {
     overlayNextEpText.textContent = `Следующая серия (С${nextTarget.season} Е${nextTarget.episode}) ⏭`;
@@ -1537,41 +1549,46 @@ function clearTvFocus() {
   }
 }
 
-function getVisibleFocusableElements() {
+function getVisibleFocusableWithRects() {
   const scope = !parsersModal.classList.contains('hidden')
     ? parsersModal
     : (!itemModal.classList.contains('hidden') ? itemModal : document.body);
 
-  return Array.from(scope.querySelectorAll('.focusable')).filter(el => {
-    if (el.offsetParent === null) return false;
+  const result = [];
+  for (const el of scope.querySelectorAll('.focusable')) {
+    if (el.offsetParent === null) continue;
     const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
+    if (rect.width > 0 && rect.height > 0) {
+      result.push({ el, rect });
+    }
+  }
+  return result;
 }
 
 function moveSpatialFocus(direction) {
-  const candidates = getVisibleFocusableElements();
+  const candidates = getVisibleFocusableWithRects();
   if (candidates.length === 0) return;
 
-  if (!currentTvFocusedEl || !candidates.includes(currentTvFocusedEl)) {
+  const currentEntry = currentTvFocusedEl ? candidates.find(c => c.el === currentTvFocusedEl) : null;
+  if (!currentEntry) {
     const activeEl = document.activeElement;
-    currentTvFocusedEl = candidates.includes(activeEl) ? activeEl : candidates[0];
+    const activeEntry = candidates.find(c => c.el === activeEl) || candidates[0];
+    currentTvFocusedEl = activeEntry.el;
     currentTvFocusedEl.classList.add('tv-focus');
     currentTvFocusedEl.focus({ preventScroll: true });
-    currentTvFocusedEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    currentTvFocusedEl.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
     return;
   }
 
-  const curRect = currentTvFocusedEl.getBoundingClientRect();
+  const curRect = currentEntry.rect;
   const curCx = curRect.left + curRect.width / 2;
   const curCy = curRect.top + curRect.height / 2;
 
   let bestEl = null;
   let bestScore = Infinity;
 
-  for (const el of candidates) {
+  for (const { el, rect: r } of candidates) {
     if (el === currentTvFocusedEl) continue;
-    const r = el.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
     const dx = cx - curCx;
@@ -1612,7 +1629,7 @@ function moveSpatialFocus(direction) {
     currentTvFocusedEl = bestEl;
     currentTvFocusedEl.classList.add('tv-focus');
     currentTvFocusedEl.focus({ preventScroll: true });
-    currentTvFocusedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    currentTvFocusedEl.scrollIntoView({ behavior: isSmartTv ? 'auto' : 'smooth', block: 'nearest', inline: 'nearest' });
   }
 }
 
@@ -1897,9 +1914,13 @@ html5Video.addEventListener('ended', () => {
 });
 
 if (videoStageArea) {
-  videoStageArea.addEventListener('mousemove', () => revealVideoOverlayControls());
   videoStageArea.addEventListener('pointermove', e => {
-    if (e.pointerType !== 'touch') revealVideoOverlayControls();
+    if (e.pointerType === 'touch') return;
+    const now = Date.now();
+    if (now - lastOverlayRevealTs >= 250) {
+      lastOverlayRevealTs = now;
+      revealVideoOverlayControls();
+    }
   });
   videoStageArea.addEventListener('touchstart', () => revealVideoOverlayControls(), { passive: true });
 
