@@ -457,7 +457,7 @@ const logoutBtn = document.getElementById('logoutBtn');
 const CATEGORY_TITLES = {
   all: 'Весь каталог',
   popular: 'Популярное сейчас',
-  new: 'Новинки 2023–2026',
+  new: `Новинки ${new Date().getFullYear() - 1}–${new Date().getFullYear()}`,
   movie: 'Фильмы',
   series: 'Сериалы',
   cartoon: 'Мультфильмы',
@@ -784,8 +784,9 @@ function renderHeroBanner(items) {
 
 function getFilteredLocalCatalog() {
   let list = [...(state.masterCatalog || [])];
+  const newThreshold = new Date().getFullYear() - 1;
 
-  if (state.category === 'new') list = list.filter(x => x.isNew || x.year >= 2023);
+  if (state.category === 'new') list = list.filter(x => x.isNew || x.year >= newThreshold);
   else if (state.category === 'popular') list = list.filter(x => x.isPopular);
   else if (state.category === 'movie') list = list.filter(x => x.type === 'movie');
   else if (state.category === 'series') list = list.filter(x => x.type === 'series');
@@ -804,8 +805,8 @@ function getFilteredLocalCatalog() {
 
   if (state.sort === 'rating') {
     list.sort((a, b) => ((b.ratingKp || 0) + (b.ratingImdb || 0)) - ((a.ratingKp || 0) + (a.ratingImdb || 0)));
-  } else if (state.sort === 'year') {
-    list.sort((a, b) => (b.year || 0) - (a.year || 0));
+  } else if (state.sort === 'year' || (state.category === 'new' && state.sort === 'popular')) {
+    list.sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.ratingImdb || 0) - (a.ratingImdb || 0)));
   } else if (state.sort === 'title') {
     list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'ru'));
   }

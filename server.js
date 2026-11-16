@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import pg from 'pg';
 import { fileURLToPath } from 'node:url';
+
+const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -848,7 +851,7 @@ async function enrichWithRussianMetadata(items) {
 
 async function handleSearch(query) {
   const q = (query || '').trim();
-  if (!q) return SEED_CATALOG;
+  if (!q) return liveCatalog;
 
   const cacheKey = q.toLowerCase();
   if (searchCache.has(cacheKey)) {
@@ -856,11 +859,11 @@ async function handleSearch(query) {
   }
 
   const qLower = q.toLowerCase();
-  const localMatches = SEED_CATALOG.filter(item =>
+  const localMatches = liveCatalog.filter(item =>
     item.title.toLowerCase().includes(qLower) ||
     item.originalTitle.toLowerCase().includes(qLower) ||
-    item.cast.toLowerCase().includes(qLower) ||
-    item.genres.some(g => g.toLowerCase().includes(qLower))
+    (item.cast || '').toLowerCase().includes(qLower) ||
+    (item.genres || []).some(g => g.toLowerCase().includes(qLower))
   );
 
   let remoteItems = [];
@@ -944,7 +947,7 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct', 
     }
   }
 
-  let baseItem = SEED_CATALOG.find(x => x.imdbId === imdbId);
+  let baseItem = liveCatalog.find(x => x.imdbId === imdbId);
   if (!baseItem) {
     for (const list of searchCache.values()) {
       const found = list.find(x => x.imdbId === imdbId);
@@ -1405,11 +1408,300 @@ function getAuthTokenFromReq(req) {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-function getAuthenticatedUser(req) {
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const pgPool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_URL.includes('localhost') || DATABASE_URL.includes('127.0.0.1')
+        ? false
+        : { rejectUnauthorized: false }
+    })
+  : null;
+
+async function initDatabase() {
+  if (!pgPool) return;
+  try {
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS spbguka_users (
+        username_lower TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        history_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        favorites_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
+    console.log('PostgreSQL database ready (spbguka_users)');
+  } catch (e) {
+    console.error('PostgreSQL init error:', e.message);
+  }
+}
+
+async function findUserByKey(key) {
+  if (pgPool) {
+    const r = await pgPool.query(
+      'SELECT username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at FROM spbguka_users WHERE username_lower = $1',
+      [key]
+    );
+    if (r.rows.length === 0) return null;
+    const row = r.rows[0];
+    return {
+      usernameLower: row.username_lower,
+      username: row.username,
+      passwordHash: row.password_hash,
+      history: Array.isArray(row.history_json) ? row.history_json : [],
+      favorites: Array.isArray(row.favorites_json) ? row.favorites_json : [],
+      createdAt: Number(row.created_at) || Date.now(),
+      updatedAt: Number(row.updated_at) || Date.now()
+    };
+  }
+  return accountsDb.users[key] || null;
+}
+
+async function createUserRecord(user) {
+  if (pgPool) {
+    const r = await pgPool.query(
+      `INSERT INTO spbguka_users (username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
+       ON CONFLICT (username_lower) DO NOTHING
+       RETURNING username_lower`,
+      [
+        user.usernameLower,
+        user.username,
+        user.passwordHash,
+        JSON.stringify(user.history || []),
+        JSON.stringify(user.favorites || []),
+        user.createdAt,
+        user.updatedAt
+      ]
+    );
+    return r.rows.length > 0;
+  }
+  if (accountsDb.users[user.usernameLower]) return false;
+  accountsDb.users[user.usernameLower] = user;
+  scheduleSaveAccounts(true);
+  return true;
+}
+
+async function saveUserProgress(user, immediate = false) {
+  if (pgPool) {
+    await pgPool.query(
+      'UPDATE spbguka_users SET history_json = $2::jsonb, favorites_json = $3::jsonb, updated_at = $4 WHERE username_lower = $1',
+      [
+        user.usernameLower,
+        JSON.stringify(user.history || []),
+        JSON.stringify(user.favorites || []),
+        user.updatedAt
+      ]
+    );
+    return;
+  }
+  accountsDb.users[user.usernameLower] = user;
+  scheduleSaveAccounts(immediate);
+}
+
+async function getAuthenticatedUser(req) {
   const token = getAuthTokenFromReq(req);
   const usernameLower = verifyAuthToken(token);
   if (!usernameLower) return null;
-  return accountsDb.users[usernameLower] || null;
+  try {
+    return await findUserByKey(usernameLower);
+  } catch (e) {
+    return null;
+  }
+}
+
+// --- Live Daily 10:00 AM Catalog & Ratings Updater ---
+const GENRE_RU_MAP = {
+  Action: 'Боевик',
+  Adventure: 'Приключения',
+  Animation: 'Мультфильм',
+  Comedy: 'Комедия',
+  Crime: 'Криминал',
+  Documentary: 'Документальный',
+  Drama: 'Драма',
+  Family: 'Семейный',
+  Fantasy: 'Фэнтези',
+  History: 'История',
+  Horror: 'Ужасы',
+  Mystery: 'Детектив',
+  Romance: 'Мелодрама',
+  'Sci-Fi': 'Фантастика',
+  'Science Fiction': 'Фантастика',
+  Thriller: 'Триллер',
+  War: 'Военный',
+  Western: 'Вестерн',
+  Anime: 'Аниме'
+};
+
+let liveCatalog = SEED_CATALOG.map(x => ({
+  ...x,
+  isNew: x.year >= new Date().getFullYear() - 1
+}));
+let lastCatalogRefreshAt = 0;
+
+function parseReleaseYear(releaseInfo) {
+  const match = String(releaseInfo || '').match(/(\d{4})/);
+  return match ? Number(match[1]) : new Date().getFullYear();
+}
+
+async function fetchCinemetaTop(mediaType) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    const res = await fetch(`https://v3-cinemeta.strem.io/catalog/${mediaType}/top.json`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json.metas) ? json.metas : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+async function refreshLiveCatalog() {
+  const currentYear = new Date().getFullYear();
+  const newThreshold = currentYear - 1; // e.g., 2025-2026 in 2026
+
+  try {
+    const [movieMetas, seriesMetas] = await Promise.all([
+      fetchCinemetaTop('movie'),
+      fetchCinemetaTop('series')
+    ]);
+    const allMetas = [
+      ...seriesMetas.map(m => ({ ...m, _kind: 'series' })),
+      ...movieMetas.map(m => ({ ...m, _kind: 'movie' }))
+    ];
+
+    if (allMetas.length === 0) {
+      lastCatalogRefreshAt = Date.now();
+      return;
+    }
+
+    const liveRatingByImdb = new Map();
+    for (const m of allMetas) {
+      const imdbId = m.imdb_id || m.id;
+      if (!imdbId || !String(imdbId).startsWith('tt')) continue;
+      const parsedRating = parseFloat(m.imdbRating);
+      if (Number.isFinite(parsedRating) && parsedRating > 0) {
+        liveRatingByImdb.set(imdbId, {
+          ratingImdb: Number(parsedRating.toFixed(1)),
+          yearRange: m.releaseInfo ? String(m.releaseInfo) : ''
+        });
+      }
+    }
+
+    // Update live ratings on existing seed items
+    const updatedSeed = SEED_CATALOG.map(item => {
+      const liveMeta = liveRatingByImdb.get(item.imdbId);
+      const refreshedRating = liveMeta ? liveMeta.ratingImdb : item.ratingImdb;
+      const refreshedYearRange = (liveMeta && liveMeta.yearRange && liveMeta.yearRange.length >= 4)
+        ? liveMeta.yearRange
+        : item.yearRange;
+      return {
+        ...item,
+        ratingImdb: refreshedRating,
+        yearRange: refreshedYearRange,
+        isNew: item.year >= newThreshold || /2025|2026/.test(String(refreshedYearRange || ''))
+      };
+    });
+
+    const seedIds = new Set(updatedSeed.map(x => x.imdbId));
+    const candidateNew = [];
+    const seenNew = new Set();
+
+    for (const m of allMetas) {
+      const imdbId = m.imdb_id || m.id;
+      if (!imdbId || !String(imdbId).startsWith('tt') || seedIds.has(imdbId) || seenNew.has(imdbId)) continue;
+      seenNew.add(imdbId);
+
+      const year = parseReleaseYear(m.releaseInfo);
+      const parsedRating = parseFloat(m.imdbRating);
+      const ratingImdb = (Number.isFinite(parsedRating) && parsedRating > 0) ? Number(parsedRating.toFixed(1)) : 7.4;
+      const ratingKp = Number(Math.max(5.5, Math.min(9.5, ratingImdb - 0.1)).toFixed(1));
+      const ruGenres = (Array.isArray(m.genres) ? m.genres : [])
+        .map(g => GENRE_RU_MAP[g] || g)
+        .filter(Boolean)
+        .slice(0, 3);
+      if (ruGenres.length === 0) ruGenres.push(m._kind === 'series' ? 'Драма' : 'Кино');
+
+      const isAnim = (m.genres || []).includes('Animation');
+      const resolvedType = isAnim ? 'cartoon' : m._kind;
+      const isRecent = year >= newThreshold;
+
+      // Prioritize current new releases (2025-2026) and high-rated current hits
+      if (!isRecent && candidateNew.length >= 16) continue;
+
+      candidateNew.push({
+        id: imdbId,
+        imdbId,
+        kpId: '',
+        title: m.name || imdbId,
+        originalTitle: m.name || '',
+        type: resolvedType,
+        year,
+        yearRange: m.releaseInfo ? String(m.releaseInfo) : String(year),
+        ratingKp,
+        ratingImdb,
+        country: 'США / Мир',
+        genres: ruGenres,
+        duration: resolvedType === 'series' ? '45 мин / серия' : '115 мин',
+        director: Array.isArray(m.director) && m.director.length ? m.director.join(', ') : 'По данным IMDb',
+        cast: Array.isArray(m.cast) && m.cast.length ? m.cast.slice(0, 5).join(', ') : 'В ролях',
+        poster: m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80',
+        backdrop: m.background || m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1400&q=80',
+        isNew: isRecent,
+        isPopular: true,
+        seasonsCount: resolvedType === 'series' ? 1 : 1,
+        episodesPerSeason: resolvedType === 'series' ? [10] : [1],
+        voices: resolvedType === 'series'
+          ? ['HDrezka Studio', 'LostFilm', 'Red Head Sound', 'Кубик в кубе', 'Рус. Дублированный', 'Eng.Original']
+          : ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'JASKIER', 'Eng.Original'],
+        description: m.description || `Новинка ${year} года (${m.name}). Смотреть онлайн в HD 1080p без рекламы.`
+      });
+
+      if (candidateNew.length >= 24) break;
+    }
+
+    // Sort fresh releases first, then enrich Russian titles/KP IDs via Wikidata
+    candidateNew.sort((a, b) => (b.year - a.year) || (b.ratingImdb - a.ratingImdb));
+    const enrichedBatches = [];
+    for (let i = 0; i < candidateNew.length; i += 12) {
+      const batch = await enrichWithRussianMetadata(candidateNew.slice(i, i + 12));
+      enrichedBatches.push(...batch);
+    }
+
+    liveCatalog = [...enrichedBatches, ...updatedSeed];
+    detailsCache.clear();
+    searchCache.clear();
+    lastCatalogRefreshAt = Date.now();
+    console.log(`Catalog refreshed: ${liveCatalog.length} items (${enrichedBatches.filter(x => x.isNew).length} new ${newThreshold}-${currentYear} releases)`);
+  } catch (e) {
+    console.error('Catalog refresh failed:', e.message);
+  }
+}
+
+function getMsUntilNext10Am(tzOffsetHours = 5) {
+  const offsetMs = tzOffsetHours * 3600 * 1000;
+  const nowLocal = new Date(Date.now() + offsetMs);
+  const targetLocal = new Date(nowLocal.getTime());
+  targetLocal.setUTCHours(10, 0, 0, 0);
+  if (targetLocal.getTime() <= nowLocal.getTime()) {
+    targetLocal.setUTCDate(targetLocal.getUTCDate() + 1);
+  }
+  return targetLocal.getTime() - nowLocal.getTime();
+}
+
+function scheduleDaily10AmRefresh() {
+  const tzOffset = Number(process.env.CATALOG_REFRESH_TZ_OFFSET_HOURS ?? 5);
+  const waitMs = getMsUntilNext10Am(tzOffset);
+  setTimeout(async () => {
+    await refreshLiveCatalog();
+    scheduleDaily10AmRefresh();
+  }, waitMs);
 }
 
 function readJsonBody(req, maxBytes = 1024 * 512) {
@@ -1535,7 +1827,13 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsedUrl.pathname;
 
   if (pathname === '/health') {
-    return sendJson(res, 200, { status: 'ok', service: 'spbguka' });
+    return sendJson(res, 200, {
+      status: 'ok',
+      service: 'spbguka',
+      db: pgPool ? 'postgres' : 'local-file',
+      catalogCount: liveCatalog.length,
+      lastCatalogRefreshAt
+    });
   }
 
   // --- Auth & Account Sync Routes ---
@@ -1551,7 +1849,8 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'Пароль должен быть не короче 4 символов' }, req);
       }
       const key = rawUsername.toLowerCase();
-      if (accountsDb.users[key]) {
+      const existing = await findUserByKey(key);
+      if (existing) {
         return sendJson(res, 409, { error: 'Этот никнейм уже занят. Выберите другой или войдите.' }, req);
       }
       const now = Date.now();
@@ -1564,11 +1863,13 @@ const server = http.createServer(async (req, res) => {
         history: sanitizeHistoryList(body.history || []),
         favorites: sanitizeFavoritesList(body.favorites || [])
       };
-      accountsDb.users[key] = user;
-      scheduleSaveAccounts(true);
+      const created = await createUserRecord(user);
+      if (!created) {
+        return sendJson(res, 409, { error: 'Этот никнейм уже занят. Выберите другой или войдите.' }, req);
+      }
       const token = signAuthToken(key);
       setAuthCookie(res, token);
-      return sendJson(res, 201, { token, user: publicUserPayload(user) }, req);
+      return sendJson(res, 201, { token, user: publicUserPayload(user), db: pgPool ? 'postgres' : 'local-file' }, req);
     } catch (e) {
       return sendJson(res, 400, { error: 'Некорректные данные регистрации' }, req);
     }
@@ -1580,7 +1881,7 @@ const server = http.createServer(async (req, res) => {
       const rawUsername = String(body.username || '').trim();
       const password = String(body.password || '');
       const key = rawUsername.toLowerCase();
-      const user = accountsDb.users[key];
+      const user = await findUserByKey(key);
       if (!user || !verifyPassword(password, user.passwordHash)) {
         return sendJson(res, 401, { error: 'Неверный никнейм или пароль' }, req);
       }
@@ -1591,10 +1892,10 @@ const server = http.createServer(async (req, res) => {
         user.favorites = mergeFavoritesLists(user.favorites, body.favorites);
       }
       user.updatedAt = Date.now();
-      scheduleSaveAccounts(true);
+      await saveUserProgress(user, true);
       const token = signAuthToken(key);
       setAuthCookie(res, token);
-      return sendJson(res, 200, { token, user: publicUserPayload(user) }, req);
+      return sendJson(res, 200, { token, user: publicUserPayload(user), db: pgPool ? 'postgres' : 'local-file' }, req);
     } catch (e) {
       return sendJson(res, 400, { error: 'Ошибка входа' }, req);
     }
@@ -1606,7 +1907,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if ((pathname === '/api/auth/me' || pathname === '/api/account/sync') && req.method === 'GET') {
-    const user = getAuthenticatedUser(req);
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
     }
@@ -1614,7 +1915,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/account/sync' && req.method === 'POST') {
-    const user = getAuthenticatedUser(req);
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
     }
@@ -1632,7 +1933,7 @@ const server = http.createServer(async (req, res) => {
           : mergeFavoritesLists(user.favorites, body.favorites);
       }
       user.updatedAt = Date.now();
-      scheduleSaveAccounts(false);
+      await saveUserProgress(user, false);
       return sendJson(res, 200, { ok: true, user: publicUserPayload(user) }, req);
     } catch (e) {
       return sendJson(res, 400, { error: 'Ошибка синхронизации' }, req);
@@ -1655,10 +1956,11 @@ const server = http.createServer(async (req, res) => {
     const genre = parsedUrl.searchParams.get('genre') || 'all';
     const year = parsedUrl.searchParams.get('year') || 'all';
     const sort = parsedUrl.searchParams.get('sort') || 'popular';
+    const newThreshold = new Date().getFullYear() - 1;
 
-    let list = [...SEED_CATALOG];
+    let list = [...liveCatalog];
 
-    if (category === 'new') list = list.filter(x => x.isNew || x.year >= 2023);
+    if (category === 'new') list = list.filter(x => x.isNew || x.year >= newThreshold);
     else if (category === 'popular') list = list.filter(x => x.isPopular);
     else if (category === 'movie') list = list.filter(x => x.type === 'movie');
     else if (category === 'series') list = list.filter(x => x.type === 'series');
@@ -1676,13 +1978,13 @@ const server = http.createServer(async (req, res) => {
 
     if (sort === 'rating') {
       list.sort((a, b) => (b.ratingKp + b.ratingImdb) - (a.ratingKp + a.ratingImdb));
-    } else if (sort === 'year') {
-      list.sort((a, b) => b.year - a.year);
+    } else if (sort === 'year' || (category === 'new' && sort === 'popular')) {
+      list.sort((a, b) => (b.year - a.year) || ((b.ratingImdb || 0) - (a.ratingImdb || 0)));
     } else if (sort === 'title') {
       list.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
     }
 
-    return sendJson(res, 200, { items: list, total: list.length });
+    return sendJson(res, 200, { items: list, total: list.length, updatedAt: lastCatalogRefreshAt }, req);
   }
 
   if (pathname === '/api/search') {
@@ -1746,6 +2048,9 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`SPBGUKA (HD VideoBox Web) server running at http://0.0.0.0:${PORT}`);
+  await initDatabase();
+  setTimeout(() => refreshLiveCatalog(), 1000);
+  scheduleDaily10AmRefresh();
 });
