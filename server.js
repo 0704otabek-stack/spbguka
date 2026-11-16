@@ -593,25 +593,25 @@ const wikiCache = new Map();
 const detailsCache = new Map();
 
 function getMirrorList(preferredMirror = 'direct') {
-  if (preferredMirror === 'kinogram') {
+  if (preferredMirror === 'namy') {
     return [
-      'https://api.kinogram.best',
       'https://api.namy.ws',
-      'https://api.delivembd.ws',
-      'https://api.embess.ws'
+      'https://api.kinogram.best',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
     ];
   }
   if (preferredMirror === 'delivembd') {
     return [
       'https://api.delivembd.ws',
+      'https://api.kinogram.best',
       'https://api.embess.ws',
-      'https://api.namy.ws',
-      'https://api.kinogram.best'
+      'https://api.namy.ws'
     ];
   }
   return [
-    'https://api.namy.ws',
     'https://api.kinogram.best',
+    'https://api.namy.ws',
     'https://api.embess.ws',
     'https://api.delivembd.ws'
   ];
@@ -668,6 +668,55 @@ function extractJsonArray(str, startIdx) {
   return null;
 }
 
+function normalizeAudioTracks(rawNames, rawOrder) {
+  const names = Array.isArray(rawNames) && rawNames.length ? rawNames : ['Рус. Дублированный'];
+  const entries = [];
+  const seenCounts = new Map();
+
+  const orderIndices = (Array.isArray(rawOrder) && rawOrder.length > 0)
+    ? rawOrder.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < names.length)
+    : names.map((_, idx) => idx);
+
+  const orderedSet = new Set(orderIndices);
+  for (let i = 0; i < names.length; i++) {
+    if (!orderedSet.has(i)) orderIndices.push(i);
+  }
+
+  for (const rawIdx of orderIndices) {
+    const labelRaw = String(names[rawIdx] || '').trim();
+    if (!labelRaw || labelRaw.toLowerCase() === 'delete') continue;
+    const key = labelRaw.toLowerCase();
+    const count = (seenCounts.get(key) || 0) + 1;
+    seenCounts.set(key, count);
+    entries.push({
+      name: count > 1 ? `${labelRaw} (${count})` : labelRaw,
+      trackIndex: rawIdx
+    });
+  }
+
+  return entries.length > 0 ? entries : [{ name: 'Рус. Дублированный', trackIndex: 0 }];
+}
+
+function extractAudioFromBlock(mkBlock) {
+  let names = ['Рус. Дублированный'];
+  let order = null;
+  const namesKey = mkBlock.match(/["']?names["']?\s*:/);
+  if (namesKey) {
+    const arrStr = extractJsonArray(mkBlock, namesKey.index + namesKey[0].length);
+    if (arrStr) {
+      try { names = JSON.parse(arrStr); } catch (e) {}
+    }
+  }
+  const orderKey = mkBlock.match(/["']?order["']?\s*:/);
+  if (orderKey) {
+    const arrStr = extractJsonArray(mkBlock, orderKey.index + orderKey[0].length);
+    if (arrStr) {
+      try { order = JSON.parse(arrStr); } catch (e) {}
+    }
+  }
+  return normalizeAudioTracks(names, order);
+}
+
 // Parse real HLS streams, seasons, episodes, and Russian studio voiceover tracks from Namy / Kinogram / Embess / Delivembd balancers
 async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
   const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
@@ -718,10 +767,12 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
               seasonsMap[sNum] = [];
               for (const ep of (sObj.episodes || [])) {
                 const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
-                const epVoices = ep.audio?.names || ['Русский перевод'];
+                const voiceTracks = normalizeAudioTracks(ep.audio?.names, ep.audio?.order);
+                const epVoices = voiceTracks.map(t => t.name);
                 epVoices.forEach(v => allVoicesSet.add(v));
 
-                const signedHls = ep.hls ? (token ? `${ep.hls}&${token}` : ep.hls) : '';
+                const rawEpHls = ep.hls ? ep.hls.replace(/\\u0026/g, '&').replace(/\\\//g, '/') : '';
+                const signedHls = rawEpHls ? (token ? `${rawEpHls}&${token}` : rawEpHls) : '';
                 seasonsMap[sNum].push({
                   season: sNum,
                   episode: epNum,
@@ -730,6 +781,7 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
                   hlsUrl: signedHls ? `/api/hls-proxy?url=${encodeURIComponent(signedHls)}` : '',
                   rawHls: signedHls,
                   voices: epVoices,
+                  voiceTracks,
                   subtitles: (ep.cc || []).map(c => ({
                     name: c.name,
                     url: `/api/hls-proxy?url=${encodeURIComponent(c.url)}`
@@ -753,12 +805,10 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
         // Case 2: Movie with source: { hls, audio, cc }
         const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
         if (hlsMatch) {
-          const signedHls = token ? `${hlsMatch[1]}&${token}` : hlsMatch[1];
-          let voices = ['Рус. Дублированный'];
-          const audioNamesMatch = mkBlock.match(/"names"\s*:\s*(\[[^\]]+\])/);
-          if (audioNamesMatch) {
-            try { voices = JSON.parse(audioNamesMatch[1]); } catch (e) {}
-          }
+          const rawMovieHls = hlsMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+          const signedHls = token ? `${rawMovieHls}&${token}` : rawMovieHls;
+          const voiceTracks = extractAudioFromBlock(mkBlock);
+          const voices = voiceTracks.map(t => t.name);
 
           const hlsProxyUrl = `/api/hls-proxy?url=${encodeURIComponent(signedHls)}`;
           const result = {
@@ -776,6 +826,7 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
                   hlsUrl: hlsProxyUrl,
                   rawHls: signedHls,
                   voices,
+                  voiceTracks,
                   subtitles: []
                 }
               ]
@@ -1140,9 +1191,13 @@ async function handleHlsProxy(req, res, targetUrl, audioIdxParam, singleAudioPar
             continue;
           }
           const isSelected = currentIdx === effectiveAudioIdx;
-          line = line
-            .replace(/DEFAULT=(YES|NO)/g, `DEFAULT=${isSelected ? 'YES' : 'NO'}`)
-            .replace(/AUTOSELECT=(YES|NO)/g, `AUTOSELECT=${isSelected ? 'YES' : 'NO'}`);
+          const flagVal = isSelected ? 'YES' : 'NO';
+          line = /DEFAULT=(YES|NO)/.test(line)
+            ? line.replace(/DEFAULT=(YES|NO)/g, `DEFAULT=${flagVal}`)
+            : `${line},DEFAULT=${flagVal}`;
+          line = /AUTOSELECT=(YES|NO)/.test(line)
+            ? line.replace(/AUTOSELECT=(YES|NO)/g, `AUTOSELECT=${flagVal}`)
+            : `${line},AUTOSELECT=${flagVal}`;
         }
 
         // Rewrite URI="..." inside #EXT-X-MEDIA or #EXT-X-KEY or #EXT-X-MAP

@@ -21,6 +21,7 @@ const state = {
   activeTab: 'player',
   selectedBalancer: 'direct',
   selectedVoice: 'Рус. Дублированный',
+  preferredVoice: '',
   selectedQuality: 'Авто (Макс. 1080p)',
   selectedSeason: 1,
   selectedEpisode: 1
@@ -56,28 +57,100 @@ let lastAccountPullTs = 0;
 const clientStreamCache = new Map();
 
 function getClientMirrorList(preferredMirror = 'direct') {
-  if (preferredMirror === 'kinogram') {
+  if (preferredMirror === 'namy') {
     return [
-      'https://api.kinogram.best',
       'https://api.namy.ws',
-      'https://api.delivembd.ws',
-      'https://api.embess.ws'
+      'https://api.kinogram.best',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
     ];
   }
   if (preferredMirror === 'delivembd') {
     return [
       'https://api.delivembd.ws',
+      'https://api.kinogram.best',
       'https://api.embess.ws',
-      'https://api.namy.ws',
-      'https://api.kinogram.best'
+      'https://api.namy.ws'
     ];
   }
   return [
-    'https://api.namy.ws',
     'https://api.kinogram.best',
+    'https://api.namy.ws',
     'https://api.embess.ws',
     'https://api.delivembd.ws'
   ];
+}
+
+function normalizeAudioTracks(rawNames, rawOrder) {
+  const names = Array.isArray(rawNames) && rawNames.length ? rawNames : ['Рус. Дублированный'];
+  const entries = [];
+  const seenCounts = new Map();
+
+  const orderIndices = (Array.isArray(rawOrder) && rawOrder.length > 0)
+    ? rawOrder.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < names.length)
+    : names.map((_, idx) => idx);
+
+  const orderedSet = new Set(orderIndices);
+  for (let i = 0; i < names.length; i++) {
+    if (!orderedSet.has(i)) orderIndices.push(i);
+  }
+
+  for (const rawIdx of orderIndices) {
+    const labelRaw = String(names[rawIdx] || '').trim();
+    if (!labelRaw || labelRaw.toLowerCase() === 'delete') continue;
+    const key = labelRaw.toLowerCase();
+    const count = (seenCounts.get(key) || 0) + 1;
+    seenCounts.set(key, count);
+    entries.push({
+      name: count > 1 ? `${labelRaw} (${count})` : labelRaw,
+      trackIndex: rawIdx
+    });
+  }
+
+  return entries.length > 0 ? entries : [{ name: 'Рус. Дублированный', trackIndex: 0 }];
+}
+
+function extractAudioFromBlock(mkBlock) {
+  let names = ['Рус. Дублированный'];
+  let order = null;
+  const namesKey = mkBlock.match(/["']?names["']?\s*:/);
+  if (namesKey) {
+    const arrStr = extractJsonArray(mkBlock, namesKey.index + namesKey[0].length);
+    if (arrStr) {
+      try { names = JSON.parse(arrStr); } catch (e) {}
+    }
+  }
+  const orderKey = mkBlock.match(/["']?order["']?\s*:/);
+  if (orderKey) {
+    const arrStr = extractJsonArray(mkBlock, orderKey.index + orderKey[0].length);
+    if (arrStr) {
+      try { order = JSON.parse(arrStr); } catch (e) {}
+    }
+  }
+  return normalizeAudioTracks(names, order);
+}
+
+function getEpisodeVoiceTracks(item, ep) {
+  if (ep?.voiceTracks && ep.voiceTracks.length > 0) return ep.voiceTracks;
+  const rawNames = (ep?.voices && ep.voices.length)
+    ? ep.voices
+    : (item?.voices && item.voices.length ? item.voices : ['Рус. Дублированный']);
+  return normalizeAudioTracks(rawNames, null);
+}
+
+function resolveVoiceSelection(item, ep, desiredName) {
+  const tracks = getEpisodeVoiceTracks(item, ep);
+  if (!desiredName) return tracks[0];
+  const exact = tracks.find(t => t.name === desiredName);
+  if (exact) return exact;
+  const lower = desiredName.trim().toLowerCase();
+  const ci = tracks.find(t => t.name.toLowerCase() === lower);
+  if (ci) return ci;
+  const stripSuffix = s => s.replace(/\s*\(\d+\)\s*$/, '').trim().toLowerCase();
+  const baseWanted = stripSuffix(desiredName);
+  const partial = tracks.find(t => stripSuffix(t.name) === baseWanted);
+  if (partial) return partial;
+  return tracks[0];
 }
 
 function extractJsonArray(str, startIdx) {
@@ -136,10 +209,12 @@ async function probeClientMirror(mirror, paths) {
             seasonsMap[sNum] = [];
             for (const ep of (sObj.episodes || [])) {
               const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
-              const epVoices = ep.audio?.names || ['Русский перевод'];
+              const voiceTracks = normalizeAudioTracks(ep.audio?.names, ep.audio?.order);
+              const epVoices = voiceTracks.map(t => t.name);
               epVoices.forEach(v => allVoicesSet.add(v));
 
-              const signedHls = ep.hls ? (token ? `${ep.hls}&${token}` : ep.hls) : '';
+              const rawEpHls = ep.hls ? ep.hls.replace(/\\u0026/g, '&').replace(/\\\//g, '/') : '';
+              const signedHls = rawEpHls ? (token ? `${rawEpHls}&${token}` : rawEpHls) : '';
               seasonsMap[sNum].push({
                 season: sNum,
                 episode: epNum,
@@ -148,6 +223,7 @@ async function probeClientMirror(mirror, paths) {
                 hlsUrl: signedHls,
                 rawHls: signedHls,
                 voices: epVoices,
+                voiceTracks,
                 subtitles: (ep.cc || []).map(c => ({ name: c.name, url: c.url }))
               });
             }
@@ -166,12 +242,10 @@ async function probeClientMirror(mirror, paths) {
       // Single Movie with source.hls
       const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
       if (hlsMatch) {
-        const signedHls = token ? `${hlsMatch[1]}&${token}` : hlsMatch[1];
-        let voices = ['Рус. Дублированный'];
-        const audioNamesMatch = mkBlock.match(/"names"\s*:\s*(\[[^\]]+\])/);
-        if (audioNamesMatch) {
-          try { voices = JSON.parse(audioNamesMatch[1]); } catch (e) {}
-        }
+        const rawMovieHls = hlsMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+        const signedHls = token ? `${rawMovieHls}&${token}` : rawMovieHls;
+        const voiceTracks = extractAudioFromBlock(mkBlock);
+        const voices = voiceTracks.map(t => t.name);
 
         return {
           found: true,
@@ -188,6 +262,7 @@ async function probeClientMirror(mirror, paths) {
                 hlsUrl: signedHls,
                 rawHls: signedHls,
                 voices,
+                voiceTracks,
                 subtitles: []
               }
             ]
@@ -202,7 +277,7 @@ async function probeClientMirror(mirror, paths) {
 }
 
 // Client-Side Mirror Extractor: runs directly from the user's browser (residential IP + real UA)
-// Racing mirrors concurrently with Promise.any so streams resolve in ~300ms.
+// Picks the mirror returning the most complete set of voiceover tracks without blocking on dead mirrors.
 async function parseClientStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
   const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
   const cached = clientStreamCache.get(cacheKey);
@@ -225,7 +300,16 @@ async function parseClientStreamBalancer(imdbId, kpId, preferredMirror = 'direct
         result = await Promise.any(mirrors.slice(1).map(m => probeClientMirror(m, paths)));
       }
     } else {
-      result = await Promise.any(mirrors.map(m => probeClientMirror(m, paths)));
+      const settledPromise = Promise.allSettled(mirrors.map(m => probeClientMirror(m, paths)))
+        .then(outcomes => {
+          const valid = outcomes
+            .filter(o => o.status === 'fulfilled' && o.value && o.value.found)
+            .map(o => o.value);
+          if (valid.length === 0) return null;
+          valid.sort((a, b) => (b.voices?.length || 0) - (a.voices?.length || 0));
+          return valid[0];
+        });
+      result = await settledPromise;
     }
     if (result && result.found) {
       clientStreamCache.set(cacheKey, { ts: Date.now(), data: result });
@@ -282,9 +366,13 @@ async function buildClientHlsManifestUrl(rawHlsUrl, voiceIdx, singleAudio = fals
         const currentIdx = audioCounter++;
         if (singleAudio && currentIdx !== effectiveAudioIdx) continue;
         const isSelected = currentIdx === effectiveAudioIdx;
-        line = line
-          .replace(/DEFAULT=(YES|NO)/g, `DEFAULT=${isSelected ? 'YES' : 'NO'}`)
-          .replace(/AUTOSELECT=(YES|NO)/g, `AUTOSELECT=${isSelected ? 'YES' : 'NO'}`);
+        const flagVal = isSelected ? 'YES' : 'NO';
+        line = /DEFAULT=(YES|NO)/.test(line)
+          ? line.replace(/DEFAULT=(YES|NO)/g, `DEFAULT=${flagVal}`)
+          : `${line},DEFAULT=${flagVal}`;
+        line = /AUTOSELECT=(YES|NO)/.test(line)
+          ? line.replace(/AUTOSELECT=(YES|NO)/g, `AUTOSELECT=${flagVal}`)
+          : `${line},AUTOSELECT=${flagVal}`;
       }
 
       if (line.startsWith('#') && line.includes('URI="')) {
@@ -1066,6 +1154,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   const savedHistory = state.history.find(h => h.imdbId === itemSummary.imdbId);
   state.selectedSeason = savedHistory?.season || 1;
   state.selectedEpisode = savedHistory?.episode || 1;
+  state.preferredVoice = savedHistory?.voice || '';
   state.selectedVoice = savedHistory?.voice || (itemSummary.voices && itemSummary.voices[0]) || 'Рус. Дублированный';
   state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
 
@@ -1125,11 +1214,9 @@ async function openItemModal(itemSummary, initialTab = 'player') {
     : (epsInSeason[0]?.episode || 1);
 
   const activeEp = getActiveEpisodeObj(item);
-  const availableVoices = (activeEp?.voices && activeEp.voices.length) ? activeEp.voices : (item.voices || ['Рус. Дублированный']);
-
-  state.selectedVoice = (savedHistory?.voice && availableVoices.includes(savedHistory.voice))
-    ? savedHistory.voice
-    : availableVoices[0];
+  const initialSelection = resolveVoiceSelection(item, activeEp, state.preferredVoice || state.selectedVoice);
+  state.selectedVoice = initialSelection.name;
+  if (!state.preferredVoice) state.preferredVoice = initialSelection.name;
 
   state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
 
@@ -1170,6 +1257,7 @@ function populateInfoTab(item) {
     btn.type = 'button';
     btn.textContent = v;
     btn.addEventListener('click', () => {
+      state.preferredVoice = v;
       state.selectedVoice = v;
       populatePlayerControls(item);
       switchModalTab('player');
@@ -1188,20 +1276,30 @@ function isUsingHlsJs() {
   return Boolean(hlsInstance && window.Hls && window.Hls.isSupported());
 }
 
+function applyDesiredAudioTrack(hls) {
+  if (!hls || !hls.audioTracks || hls.audioTracks.length === 0) return;
+  const desired = typeof hls._desiredAudioTrackIdx === 'number' ? hls._desiredAudioTrackIdx : 0;
+  if (desired >= 0 && desired < hls.audioTracks.length && hls.audioTrack !== desired) {
+    hls.audioTrack = desired;
+  }
+}
+
 // Switch audio track seamlessly via hls.js or native HLS reload with ?audio=idx&singleAudio=1 (iPhone Safari / Smart TVs)
 function switchAudioTrackOrRestart(voiceName) {
   const item = state.currentItem;
   if (!item) return;
   const activeEp = getActiveEpisodeObj(item);
-  const epVoices = activeEp?.voices || item.voices || [];
-  const voiceIdx = Math.max(0, epVoices.indexOf(voiceName));
+  const resolved = resolveVoiceSelection(item, activeEp, voiceName);
+  state.selectedVoice = resolved.name;
+  const voiceIdx = resolved.trackIndex;
 
   if (isDirectHlsBalancer(state.selectedBalancer) && isUsingHlsJs() && hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
+    hlsInstance._desiredAudioTrackIdx = voiceIdx;
     hlsInstance.audioTrack = voiceIdx;
     const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
     const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
     nowPlayingText.textContent = `${item.title}${epPart} • ${state.selectedVoice} • ${state.selectedQuality}`;
-    addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, html5Video.currentTime || 0);
+    addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, html5Video.currentTime || 0, html5Video.duration || 0);
   } else {
     startPlayback(html5Video.currentTime || 0, true);
   }
@@ -1238,13 +1336,12 @@ function markFilesTabDirtyOrRefresh(item) {
 
 function populatePlayerControls(item) {
   const activeEp = getActiveEpisodeObj(item);
-  const voices = (activeEp?.voices && activeEp.voices.length)
-    ? activeEp.voices
-    : (item.voices || ['Рус. Дублированный', 'HDrezka Studio', 'Red Head Sound']);
+  const tracks = getEpisodeVoiceTracks(item, activeEp);
+  const voices = tracks.map(t => t.name);
 
-  if (!voices.includes(state.selectedVoice)) {
-    state.selectedVoice = voices[0];
-  }
+  const desiredTarget = state.preferredVoice || state.selectedVoice;
+  const resolved = resolveVoiceSelection(item, activeEp, desiredTarget);
+  state.selectedVoice = resolved.name;
 
   // Voices
   voiceSelector.innerHTML = '';
@@ -1254,6 +1351,7 @@ function populatePlayerControls(item) {
     btn.type = 'button';
     btn.textContent = voice;
     btn.addEventListener('click', () => {
+      state.preferredVoice = voice;
       state.selectedVoice = voice;
       populatePlayerControls(item);
       switchAudioTrackOrRestart(voice);
@@ -1648,8 +1746,9 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
 
   const myPlayToken = ++playbackRequestToken;
   const activeEp = getActiveEpisodeObj(item);
-  const epVoices = activeEp?.voices || item.voices || ['Рус. Дублированный'];
-  const voiceIdx = Math.max(0, epVoices.indexOf(state.selectedVoice));
+  const resolvedVoice = resolveVoiceSelection(item, activeEp, state.preferredVoice || state.selectedVoice);
+  state.selectedVoice = resolvedVoice.name;
+  const voiceIdx = resolvedVoice.trackIndex;
 
   addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, resumeSeconds);
 
@@ -1668,9 +1767,8 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
     // Prefer hls.js on PC, Linux, Android, webOS Chromium
     if (window.Hls && window.Hls.isSupported()) {
       if (!forceReload && currentLoadedHlsUrl === streamUrl && hlsInstance) {
-        if (hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
-          hlsInstance.audioTrack = voiceIdx;
-        }
+        hlsInstance._desiredAudioTrackIdx = voiceIdx;
+        applyDesiredAudioTrack(hlsInstance);
         switchQualityLevel(state.selectedQuality);
         html5Video.play().catch(() => {});
         return;
@@ -1683,7 +1781,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
       currentLoadedHlsUrl = streamUrl;
       html5Video.poster = '';
 
-      hlsInstance = new window.Hls({
+      const activeHls = new window.Hls({
         enableWorker: true,
         lowLatencyMode: false,
         maxBufferLength: 30,
@@ -1691,14 +1789,14 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
         backBufferLength: 30,
         capLevelToPlayerSize: true
       });
+      activeHls._desiredAudioTrackIdx = voiceIdx;
+      hlsInstance = activeHls;
 
-      hlsInstance.loadSource(manifestUrl);
-      hlsInstance.attachMedia(html5Video);
+      activeHls.loadSource(manifestUrl);
+      activeHls.attachMedia(html5Video);
 
-      hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
-        if (hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
-          hlsInstance.audioTrack = voiceIdx;
-        }
+      activeHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+        applyDesiredAudioTrack(activeHls);
         switchQualityLevel(state.selectedQuality);
         if (resumeSeconds > 2) {
           html5Video.currentTime = resumeSeconds;
@@ -1706,11 +1804,8 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
         html5Video.play().catch(() => {});
       });
 
-      hlsInstance.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-        if (hlsInstance.audioTracks && voiceIdx < hlsInstance.audioTracks.length) {
-          hlsInstance.audioTrack = voiceIdx;
-        }
-      });
+      activeHls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => applyDesiredAudioTrack(activeHls));
+      activeHls.on(window.Hls.Events.LEVEL_SWITCHED, () => applyDesiredAudioTrack(activeHls));
       return;
     }
 
