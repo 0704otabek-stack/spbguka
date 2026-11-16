@@ -1466,8 +1466,8 @@ body.pseudo-fullscreen-open {
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 24;
+  transform: translate(-50%, -50%) scale(0.92);
+  z-index: 26;
   width: 68px;
   height: 68px;
   border-radius: 50%;
@@ -1478,9 +1478,17 @@ body.pseudo-fullscreen-open {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  padding-left: 4px;
+  opacity: 0;
+  pointer-events: none;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition: transform 0.15s ease, opacity 0.18s ease;
+}
+
+.video-stage-area.controls-active .video-center-play,
+.video-stage-area.is-paused .video-center-play {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
 }
 
 .video-center-play:hover {
@@ -1505,7 +1513,7 @@ body.pseudo-fullscreen-open {
 }
 
 .video-stage-area.controls-active .custom-video-bar,
-.video-stage-area:hover .custom-video-bar {
+.video-stage-area.is-paused .custom-video-bar {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
@@ -1597,6 +1605,65 @@ body.pseudo-fullscreen-open {
   border-color: var(--brand);
 }
 
+.vc-volume-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9px;
+  padding: 2px;
+}
+
+.vc-volume-group .vc-btn {
+  border: none;
+  background: transparent;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 5px;
+}
+
+.vc-volume-group .vc-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.vc-vol-step {
+  font-size: 0.96rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.vc-volume-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 64px;
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #fff 0%, #fff var(--vol-pct, 100%), rgba(255, 255, 255, 0.28) var(--vol-pct, 100%), rgba(255, 255, 255, 0.28) 100%);
+  outline: none;
+  cursor: pointer;
+  margin: 0 4px;
+}
+
+.vc-volume-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+}
+
+.vc-volume-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: none;
+  background: #fff;
+  cursor: pointer;
+}
+
 .video-time-text {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 0.76rem;
@@ -1661,7 +1728,7 @@ body.pseudo-fullscreen-open {
 }
 
 .video-stage-area.controls-active .overlay-120-group,
-.video-stage-area:hover .overlay-120-group {
+.video-stage-area.is-paused .overlay-120-group {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
@@ -2698,11 +2765,17 @@ body.pseudo-fullscreen-open {
     grid-template-columns: 1fr;
   }
   .video-smart-overlay {
-    right: 10px;
-    bottom: 74px;
+    right: 8px;
+    bottom: 64px;
+    gap: 5px;
+  }
+  .video-stage-area:not(.is-fullscreen) .overlay-120-group {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 5px;
   }
   .custom-video-bar {
-    padding: 20px 10px 8px;
+    padding: 16px 10px 8px;
     gap: 6px;
   }
   .vc-btn {
@@ -2714,20 +2787,48 @@ body.pseudo-fullscreen-open {
   .vc-btn-text {
     display: none;
   }
+  .vc-volume-range {
+    width: 46px;
+  }
+  .vc-volume-group .vc-btn {
+    height: 26px;
+    min-width: 25px;
+    padding: 0 4px;
+  }
+  .vc-btn-fs {
+    padding: 0 8px;
+    font-size: 0.7rem;
+  }
   .video-time-text {
     font-size: 0.7rem;
   }
   .video-center-play {
-    width: 56px;
-    height: 56px;
+    width: 48px;
+    height: 48px;
+  }
+  .video-stage-area:not(.is-fullscreen) .video-center-play {
+    top: 43%;
   }
   .video-smart-btn {
-    padding: 6px 11px;
-    font-size: 0.75rem;
+    padding: 5px 9px;
+    font-size: 0.71rem;
+    border-radius: 8px;
+  }
+  .player-osd {
+    top: 8px;
+    right: 8px;
+    padding: 5px 10px;
+    font-size: 0.74rem;
   }
   .seek-feedback {
     padding: 7px 13px;
     font-size: 0.8rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .vc-volume-range {
+    display: none;
   }
 }
 
@@ -2789,6 +2890,12 @@ html.tv-mode .vc-btn {
   min-width: 42px;
   padding: 0 13px;
   font-size: 0.88rem;
+}
+
+html.tv-mode .vc-volume-group .vc-btn {
+  height: 34px;
+  min-width: 34px;
+  padding: 0 8px;
 }
 
 html.tv-mode .release-poster-wrap,

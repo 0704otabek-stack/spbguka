@@ -490,6 +490,8 @@ const directPlayerWrap = document.getElementById('directPlayerWrap');
 const videoStageArea = document.getElementById('videoStageArea');
 const html5Video = document.getElementById('html5Video');
 const videoCenterPlayBtn = document.getElementById('videoCenterPlayBtn');
+const vcCenterPlayIcon = document.getElementById('vcCenterPlayIcon');
+const vcCenterPauseIcon = document.getElementById('vcCenterPauseIcon');
 const customVideoBar = document.getElementById('customVideoBar');
 const videoProgressRange = document.getElementById('videoProgressRange');
 const vcPlayPauseBtn = document.getElementById('vcPlayPauseBtn');
@@ -497,9 +499,12 @@ const vcPlayIcon = document.getElementById('vcPlayIcon');
 const vcPauseIcon = document.getElementById('vcPauseIcon');
 const vcBack5Btn = document.getElementById('vcBack5Btn');
 const vcFwd5Btn = document.getElementById('vcFwd5Btn');
+const vcVolDownBtn = document.getElementById('vcVolDownBtn');
 const vcMuteBtn = document.getElementById('vcMuteBtn');
 const vcVolIcon = document.getElementById('vcVolIcon');
 const vcMuteIcon = document.getElementById('vcMuteIcon');
+const vcVolumeRange = document.getElementById('vcVolumeRange');
+const vcVolUpBtn = document.getElementById('vcVolUpBtn');
 const videoTimeText = document.getElementById('videoTimeText');
 const vcFullscreenBtn = document.getElementById('vcFullscreenBtn');
 const vcFsEnterIcon = document.getElementById('vcFsEnterIcon');
@@ -545,6 +550,7 @@ const installModal = document.getElementById('installModal');
 const closeInstallModalBtn = document.getElementById('closeInstallModalBtn');
 const pwaInstallActionBtn = document.getElementById('pwaInstallActionBtn');
 const pwaInstallHint = document.getElementById('pwaInstallHint');
+const pwaRefreshAppBtn = document.getElementById('pwaRefreshAppBtn');
 
 // Account & Sync Elements
 const accountBtn = document.getElementById('accountBtn');
@@ -1239,7 +1245,7 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   updateFavButtonState();
   updateBalancerButtons();
   startPlayback(savedHistory?.currentTime || 0, true);
-  revealVideoOverlayControls(3200);
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
 }
 
 function populateInfoTab(item) {
@@ -1528,16 +1534,90 @@ function formatPlayerTime(seconds) {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }
 
+const DEFAULT_CONTROLS_HIDE_MS = 2000;
+let isMouseOverPlayerControls = false;
+let touchStartedWithControls = false;
+let singleTapToggleTimer = null;
+
+function isAppleTouchVolumeLocked(requestedVol) {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) && Math.abs(html5Video.volume - requestedVol) > 0.05;
+}
+
+function saveAudioPreferences() {
+  try {
+    localStorage.setItem('spbguka_volume', String(html5Video.volume));
+    localStorage.setItem('spbguka_muted', html5Video.muted ? '1' : '0');
+  } catch (e) {}
+}
+
+function applySavedAudioPreferences() {
+  if (!html5Video) return;
+  try {
+    const rawVol = localStorage.getItem('spbguka_volume');
+    if (rawVol !== null) {
+      const parsedVol = parseFloat(rawVol);
+      if (Number.isFinite(parsedVol) && parsedVol >= 0 && parsedVol <= 1) {
+        html5Video.volume = parsedVol;
+      }
+    }
+    if (localStorage.getItem('spbguka_muted') === '1') {
+      html5Video.muted = true;
+    }
+  } catch (e) {}
+}
+
+function setVideoVolume(vol, showFeedback = true) {
+  if (!html5Video) return;
+  const clamped = Math.max(0, Math.min(1, Math.round(vol * 20) / 20));
+  html5Video.volume = clamped;
+  if (isAppleTouchVolumeLocked(clamped)) {
+    if (clamped === 0) {
+      html5Video.muted = true;
+    } else if (html5Video.muted && clamped > 0) {
+      html5Video.muted = false;
+    }
+    updateCustomVideoBar();
+    if (showFeedback) {
+      showPlayerOsd(html5Video.muted ? 'Звук выключен' : 'На iPhone громкость регулируется кнопками устройства');
+    }
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    return;
+  }
+  html5Video.muted = clamped === 0;
+  saveAudioPreferences();
+  updateCustomVideoBar();
+  if (showFeedback) {
+    showPlayerOsd(html5Video.muted ? 'Звук выключен' : `Громкость: ${Math.round(clamped * 100)}%`);
+  }
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+}
+
+function adjustVideoVolume(delta) {
+  if (!html5Video) return;
+  const baseVol = html5Video.muted ? 0 : html5Video.volume;
+  setVideoVolume(baseVol + delta, true);
+}
+
 function updateCustomVideoBar() {
   if (!html5Video) return;
   const paused = html5Video.paused || html5Video.ended;
+  if (videoStageArea) videoStageArea.classList.toggle('is-paused', paused);
   if (vcPlayIcon) vcPlayIcon.classList.toggle('hidden', !paused);
   if (vcPauseIcon) vcPauseIcon.classList.toggle('hidden', paused);
-  if (videoCenterPlayBtn) videoCenterPlayBtn.classList.toggle('hidden', !paused);
+  if (vcCenterPlayIcon) vcCenterPlayIcon.classList.toggle('hidden', !paused);
+  if (vcCenterPauseIcon) vcCenterPauseIcon.classList.toggle('hidden', paused);
+  if (videoCenterPlayBtn) {
+    videoCenterPlayBtn.setAttribute('aria-label', paused ? 'Воспроизвести' : 'Пауза');
+  }
 
-  const muted = html5Video.muted || html5Video.volume === 0;
+  const effVol = html5Video.muted ? 0 : Math.round((Number.isFinite(html5Video.volume) ? html5Video.volume : 1) * 100);
+  const muted = html5Video.muted || effVol === 0;
   if (vcVolIcon) vcVolIcon.classList.toggle('hidden', muted);
   if (vcMuteIcon) vcMuteIcon.classList.toggle('hidden', !muted);
+  if (vcVolumeRange) {
+    vcVolumeRange.value = String(effVol);
+    vcVolumeRange.style.setProperty('--vol-pct', `${effVol}%`);
+  }
 
   const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
   const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
@@ -1629,13 +1709,29 @@ function updateSmartVideoOverlay() {
   }
 }
 
-function revealVideoOverlayControls(timeoutMs = 3200) {
+function hideVideoOverlayControls() {
+  if (overlayControlsTimer) {
+    clearTimeout(overlayControlsTimer);
+    overlayControlsTimer = null;
+  }
+  if (!videoStageArea || !html5Video || html5Video.paused || html5Video.ended) return;
+  videoStageArea.classList.remove('controls-active');
+}
+
+function revealVideoOverlayControls(timeoutMs = DEFAULT_CONTROLS_HIDE_MS) {
   if (!videoStageArea) return;
+  const paused = !html5Video || html5Video.paused || html5Video.ended;
   videoStageArea.classList.add('controls-active');
+  videoStageArea.classList.toggle('is-paused', paused);
   updateSmartVideoOverlay();
   if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
+  if (paused) {
+    overlayControlsTimer = null;
+    return;
+  }
   overlayControlsTimer = setTimeout(() => {
-    if (!html5Video.paused) {
+    overlayControlsTimer = null;
+    if (html5Video && !html5Video.paused && !html5Video.ended && !isMouseOverPlayerControls && !isScrubbingVideo) {
       videoStageArea.classList.remove('controls-active');
     }
   }, timeoutMs);
@@ -1957,7 +2053,7 @@ function enterPseudoFullscreen(target) {
   target.classList.add('pseudo-fullscreen');
   document.body.classList.add('pseudo-fullscreen-open');
   syncFullscreenUi();
-  revealVideoOverlayControls(3800);
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
 }
 
 let pendingFsFallbackTimer = null;
@@ -2025,7 +2121,7 @@ function enterVideoFullscreen() {
             enterPseudoFullscreen(target);
           } else {
             syncFullscreenUi();
-            revealVideoOverlayControls(3800);
+            revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
           }
         }).catch(() => {
           if (pendingFsFallbackTimer) {
@@ -2476,7 +2572,7 @@ function togglePlayPauseVideo() {
     html5Video.pause();
   }
   updateCustomVideoBar();
-  revealVideoOverlayControls(3200);
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
 }
 
 if (vcPlayPauseBtn) vcPlayPauseBtn.addEventListener('click', togglePlayPauseVideo);
@@ -2485,12 +2581,27 @@ if (vcBack5Btn) vcBack5Btn.addEventListener('click', () => seekRelative(-5));
 if (vcFwd5Btn) vcFwd5Btn.addEventListener('click', () => seekRelative(5));
 if (vcFullscreenBtn) vcFullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
+if (vcVolDownBtn) {
+  vcVolDownBtn.addEventListener('click', () => adjustVideoVolume(-0.1));
+}
+if (vcVolUpBtn) {
+  vcVolUpBtn.addEventListener('click', () => adjustVideoVolume(0.1));
+}
+if (vcVolumeRange) {
+  vcVolumeRange.addEventListener('input', () => {
+    setVideoVolume(Number(vcVolumeRange.value) / 100, true);
+  });
+}
 if (vcMuteBtn) {
   vcMuteBtn.addEventListener('click', () => {
     html5Video.muted = !html5Video.muted;
+    if (!html5Video.muted && html5Video.volume === 0) {
+      html5Video.volume = 0.5;
+    }
+    saveAudioPreferences();
     updateCustomVideoBar();
-    showPlayerOsd(html5Video.muted ? 'Звук выключен' : 'Звук включён');
-    revealVideoOverlayControls(3200);
+    showPlayerOsd(html5Video.muted ? 'Звук выключен' : `Громкость: ${Math.round(html5Video.volume * 100)}%`);
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   });
 }
 
@@ -2503,7 +2614,7 @@ if (videoProgressRange) {
     if (videoTimeText && dur > 0) {
       videoTimeText.textContent = `${formatPlayerTime(ratio * dur)} / ${formatPlayerTime(dur)}`;
     }
-    revealVideoOverlayControls(3500);
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   });
   videoProgressRange.addEventListener('change', () => {
     const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
@@ -2515,8 +2626,25 @@ if (videoProgressRange) {
     updateSmartVideoOverlay();
     updateCustomVideoBar();
     saveLivePlaybackProgress();
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   });
 }
+
+[customVideoBar, videoSmartOverlay].forEach(el => {
+  if (!el) return;
+  el.addEventListener('pointerenter', e => {
+    if (e.pointerType === 'mouse') {
+      isMouseOverPlayerControls = true;
+      revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    }
+  });
+  el.addEventListener('pointerleave', e => {
+    if (e.pointerType === 'mouse') {
+      isMouseOverPlayerControls = false;
+      revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    }
+  });
+});
 
 document.addEventListener('fullscreenchange', syncFullscreenUi);
 document.addEventListener('webkitfullscreenchange', syncFullscreenUi);
@@ -2541,14 +2669,25 @@ html5Video.addEventListener('timeupdate', () => {
 html5Video.addEventListener('play', () => {
   updateSmartVideoOverlay();
   updateCustomVideoBar();
-  revealVideoOverlayControls(2800);
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+});
+
+html5Video.addEventListener('playing', () => {
+  updateCustomVideoBar();
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
 });
 
 html5Video.addEventListener('pause', () => {
+  isMouseOverPlayerControls = false;
   updateSmartVideoOverlay();
   updateCustomVideoBar();
-  if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
-  if (videoStageArea) videoStageArea.classList.add('controls-active');
+  if (overlayControlsTimer) {
+    clearTimeout(overlayControlsTimer);
+    overlayControlsTimer = null;
+  }
+  if (videoStageArea) {
+    videoStageArea.classList.add('controls-active', 'is-paused');
+  }
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
 });
@@ -2565,16 +2704,28 @@ if (videoStageArea) {
     const now = Date.now();
     if (now - lastOverlayRevealTs >= 250) {
       lastOverlayRevealTs = now;
-      revealVideoOverlayControls();
+      revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
     }
   });
-  videoStageArea.addEventListener('touchstart', () => revealVideoOverlayControls(), { passive: true });
+  videoStageArea.addEventListener('pointerleave', e => {
+    if (e.pointerType === 'touch') return;
+    isMouseOverPlayerControls = false;
+    hideVideoOverlayControls();
+  });
+
+  videoStageArea.addEventListener('touchstart', () => {
+    touchStartedWithControls = videoStageArea.classList.contains('controls-active');
+    if (singleTapToggleTimer) {
+      clearTimeout(singleTapToggleTimer);
+      singleTapToggleTimer = null;
+    }
+  }, { passive: true });
 
   videoStageArea.addEventListener('click', e => {
     if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
       return;
     }
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch' || (Date.now() - lastTouchTapTime) < 650) return;
     if (videoClickTimer) clearTimeout(videoClickTimer);
     videoClickTimer = setTimeout(() => {
       videoClickTimer = null;
@@ -2584,6 +2735,9 @@ if (videoStageArea) {
 
   videoStageArea.addEventListener('touchend', e => {
     if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+      if (videoStageArea.classList.contains('controls-active') && !html5Video.paused) {
+        revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+      }
       return;
     }
     const rect = videoStageArea.getBoundingClientRect();
@@ -2600,13 +2754,28 @@ if (videoStageArea) {
     const windowMs = seekStreakDir === side ? 650 : 320;
     if (side !== 0 && lastTouchTapSide === side && (now - lastTouchTapTime) <= windowMs) {
       if (e.cancelable) e.preventDefault();
+      if (singleTapToggleTimer) {
+        clearTimeout(singleTapToggleTimer);
+        singleTapToggleTimer = null;
+      }
       seekRelative(side * 5);
       lastTouchTapTime = now;
       lastTouchTapSide = side;
     } else {
       lastTouchTapTime = now;
       lastTouchTapSide = side;
-      revealVideoOverlayControls(3200);
+      if (!touchStartedWithControls || html5Video.paused || html5Video.ended) {
+        revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+      } else if (side === 0) {
+        hideVideoOverlayControls();
+      } else {
+        singleTapToggleTimer = setTimeout(() => {
+          singleTapToggleTimer = null;
+          if (!html5Video.paused && !html5Video.ended) {
+            hideVideoOverlayControls();
+          }
+        }, 250);
+      }
     }
   }, { passive: false });
 
@@ -2723,6 +2892,21 @@ document.addEventListener('keydown', e => {
     if (e.key === 'f' || e.key === 'F') {
       e.preventDefault();
       toggleVideoFullscreen();
+      return;
+    }
+    if (e.key === 'm' || e.key === 'M') {
+      e.preventDefault();
+      if (vcMuteBtn) vcMuteBtn.click();
+      return;
+    }
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      adjustVideoVolume(0.1);
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      adjustVideoVolume(-0.1);
       return;
     }
   }
@@ -2893,8 +3077,13 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     saveLivePlaybackProgress();
     scheduleAccountPush('merge', true);
-  } else if (document.visibilityState === 'visible' && authToken) {
-    pullAccountSync(false);
+  } else if (document.visibilityState === 'visible') {
+    if (authToken) pullAccountSync(false);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration('/').then(reg => {
+        if (reg) reg.update().catch(() => {});
+      }).catch(() => {});
+    }
   }
 });
 
@@ -2907,12 +3096,45 @@ window.addEventListener('pagehide', () => {
   scheduleAccountPush('merge', true);
 });
 
-// PWA Service Worker & App Install Prompts (Android / Desktop / iOS / LG webOS / Linux)
+// PWA Service Worker v2 & App Install / Refresh Prompts (Android / Desktop / iOS / LG webOS / Linux)
 let deferredInstallPrompt = null;
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js?v=2', { updateViaCache: 'none' })
+      .then(reg => {
+        reg.update().catch(() => {});
+        if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+        reg.addEventListener('updatefound', () => {
+          const worker = reg.installing;
+          if (!worker) return;
+          worker.addEventListener('statechange', () => {
+            if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+              worker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
+      })
+      .catch(() => {});
+  });
+}
+
+if (pwaRefreshAppBtn) {
+  pwaRefreshAppBtn.addEventListener('click', async () => {
+    pwaRefreshAppBtn.disabled = true;
+    pwaRefreshAppBtn.textContent = 'Обновление...';
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.update().catch(() => {})));
+      }
+    } catch (e) {}
+    const sep = window.location.search ? '&' : '?';
+    window.location.replace(`${window.location.pathname}${window.location.search}${sep}upd=${Date.now()}`);
   });
 }
 
@@ -2993,6 +3215,8 @@ if (pwaInstallActionBtn) {
 document.addEventListener('pointerdown', clearTvFocus);
 
 // Initialize
+applySavedAudioPreferences();
+updateCustomVideoBar();
 updateBadges();
 updateAccountUI();
 if (authToken) pullAccountSync(true);

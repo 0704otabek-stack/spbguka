@@ -8,8 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="СПБГУКА" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+  <link rel="manifest" href="/manifest.json?v=2" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png?v=2" />
   <title>СПБГУКА — Кино, сериалы и аниме без рекламы</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=13" />
+  <link rel="stylesheet" href="/styles.css?v=15" />
 </head>
 <body>
   <!-- Top Header -->
@@ -404,10 +404,14 @@
                   preload="auto"
                 ></video>
 
-                <!-- Center Big Play Button (shown when paused; tap/OK to play) -->
-                <button id="videoCenterPlayBtn" class="video-center-play focusable hidden" type="button" aria-label="Воспроизвести">
-                  <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+                <!-- Center Play / Pause Button (appears when paused or for 2s while HUD active) -->
+                <button id="videoCenterPlayBtn" class="video-center-play focusable" type="button" aria-label="Пауза / Воспроизвести">
+                  <svg id="vcCenterPlayIcon" width="30" height="30" viewBox="0 0 24 24" fill="currentColor" style="transform: translateX(1.5px);">
                     <path d="M7 5v14l12-7z"/>
+                  </svg>
+                  <svg id="vcCenterPauseIcon" class="hidden" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="4" width="4.5" height="16" rx="1.2"></rect>
+                    <rect x="13.5" y="4" width="4.5" height="16" rx="1.2"></rect>
                   </svg>
                 </button>
 
@@ -464,17 +468,31 @@
                       </button>
                       <button id="vcBack5Btn" class="vc-btn vc-btn-text focusable" type="button" title="Назад 5 сек">-5с</button>
                       <button id="vcFwd5Btn" class="vc-btn vc-btn-text focusable" type="button" title="Вперёд 5 сек">+5с</button>
-                      <button id="vcMuteBtn" class="vc-btn focusable" type="button" aria-label="Звук">
-                        <svg id="vcVolIcon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                        </svg>
-                        <svg id="vcMuteIcon" class="hidden" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                          <line x1="23" y1="9" x2="17" y2="15"></line>
-                          <line x1="17" y1="9" x2="23" y2="15"></line>
-                        </svg>
-                      </button>
+                      <div class="vc-volume-group">
+                        <button id="vcVolDownBtn" class="vc-btn vc-vol-step focusable" type="button" title="Уменьшить громкость" aria-label="Уменьшить громкость">−</button>
+                        <button id="vcMuteBtn" class="vc-btn focusable" type="button" aria-label="Звук" title="Включить / выключить звук">
+                          <svg id="vcVolIcon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                          </svg>
+                          <svg id="vcMuteIcon" class="hidden" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <line x1="23" y1="9" x2="17" y2="15"></line>
+                            <line x1="17" y1="9" x2="23" y2="15"></line>
+                          </svg>
+                        </button>
+                        <input
+                          id="vcVolumeRange"
+                          class="vc-volume-range focusable"
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="5"
+                          value="100"
+                          aria-label="Громкость"
+                        />
+                        <button id="vcVolUpBtn" class="vc-btn vc-vol-step focusable" type="button" title="Увеличить громкость" aria-label="Увеличить громкость">+</button>
+                      </div>
                       <span id="videoTimeText" class="video-time-text">0:00 / 0:00</span>
                     </div>
                     <div class="video-controls-right">
@@ -801,15 +819,15 @@
           </div>
           <div class="install-card">
             <div>
-              <div class="p-head"><strong>Android / Chrome</strong> <span class="badge-ok">WebAPK</span></div>
+              <div class="p-head"><strong>Android / Chrome</strong> <span class="badge-ok">WebAPK v2</span></div>
               <p id="pwaInstallHint">Устанавливается как отдельное приложение без браузерной рамки с иконкой на экране «Домой» и синхронизацией профиля.</p>
             </div>
             <button id="pwaInstallActionBtn" class="btn-primary install-btn-sm focusable" type="button">Установить на устройство</button>
           </div>
           <div class="install-card">
             <div>
-              <div class="p-head"><strong>iPhone / iPad (iOS)</strong> <span class="badge-ok">Safari</span></div>
-              <p>Откройте сайт в <strong>Safari</strong>, нажмите «Поделиться» (квадрат со стрелкой вверх) → <strong>«На экран «Домой»»</strong>. Профиль синхронизируется с ПК и ТВ.</p>
+              <div class="p-head"><strong>iPhone / iPad (iOS)</strong> <span class="badge-ok">Safari v2</span></div>
+              <p>Откройте сайт в <strong>Safari</strong>, нажмите «Поделиться» (квадрат со стрелкой вверх) → <strong>«На экран «Домой»»</strong>. Если уже установлено — обновите ниже.</p>
             </div>
           </div>
           <div class="install-card">
@@ -820,10 +838,13 @@
             <a href="/downloads/install-spbguka-linux.sh" download="install-spbguka-linux.sh" class="btn-ghost install-btn-sm focusable">Скачать скрипт .sh</a>
           </div>
         </div>
+        <div class="account-install-divider">
+          <button id="pwaRefreshAppBtn" class="btn-ghost install-btn-sm focusable" type="button">Обновить установленное приложение (v2)</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="/app.js?v=16"></script>
+  <script src="/app.js?v=17"></script>
 </body>
 </html>
