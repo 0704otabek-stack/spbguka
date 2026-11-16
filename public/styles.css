@@ -77,9 +77,35 @@ body {
 /* Focus Ring for Keyboard & Smart TV D-Pad (webOS / Linux / PC) */
 .focusable:focus-visible,
 .focusable.tv-focus {
-  outline: 2px solid #fb7185 !important;
+  outline: 3px solid #ffffff !important;
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(225, 29, 72, 0.28) !important;
+  box-shadow: 0 0 0 5px rgba(225, 29, 72, 0.45) !important;
+}
+
+.movie-card.tv-focus .card-poster-wrap,
+.release-card.tv-focus .release-poster-wrap,
+.continue-card.tv-focus {
+  border-color: #ffffff !important;
+}
+
+html.tv-mode .focusable.tv-focus {
+  outline: 3px solid #ffffff !important;
+  outline-offset: 2px;
+  background-color: rgba(225, 29, 72, 0.25) !important;
+}
+
+html.tv-mode .btn-primary.tv-focus,
+html.tv-mode .chip-btn.active.tv-focus,
+html.tv-mode .hdvb-tab.active.tv-focus,
+html.tv-mode .vc-btn.tv-focus,
+html.tv-mode .video-smart-btn.tv-focus {
+  background: var(--brand) !important;
+  color: #fff !important;
+  border-color: #ffffff !important;
+}
+
+body.pseudo-fullscreen-open {
+  overflow: hidden !important;
 }
 
 /* Top Header */
@@ -1394,6 +1420,7 @@ body {
 }
 
 .video-stage-area:fullscreen,
+.video-stage-area:-webkit-full-screen,
 .direct-player-wrap:fullscreen {
   width: 100%;
   height: 100%;
@@ -1403,12 +1430,177 @@ body {
   justify-content: center;
 }
 
+.video-stage-area.pseudo-fullscreen,
+.iframe-player-wrap.pseudo-fullscreen {
+  position: fixed !important;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-height: none !important;
+  z-index: 9999 !important;
+  background: #000 !important;
+  display: flex !important;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: 0 !important;
+}
+
 .video-stage-area:fullscreen .html5-video,
+.video-stage-area:-webkit-full-screen .html5-video,
+.video-stage-area.pseudo-fullscreen .html5-video,
 .direct-player-wrap:fullscreen .html5-video {
   width: 100%;
   height: 100%;
-  max-height: none;
+  max-height: none !important;
   aspect-ratio: auto;
+  object-fit: contain;
+}
+
+.video-center-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 24;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding-left: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.video-center-play:hover {
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.custom-video-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 27;
+  padding: 28px 14px 10px;
+  background: linear-gradient(0deg, rgba(5, 6, 10, 0.94) 0%, rgba(5, 6, 10, 0.68) 60%, transparent 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.video-stage-area.controls-active .custom-video-bar,
+.video-stage-area:hover .custom-video-bar {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.video-progress-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.video-progress-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--brand) 0%, var(--brand) var(--pct, 0%), rgba(255, 255, 255, 0.24) var(--pct, 0%), rgba(255, 255, 255, 0.24) 100%);
+  outline: none;
+  cursor: pointer;
+}
+
+.video-progress-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--brand);
+  cursor: pointer;
+}
+
+.video-progress-range::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--brand);
+  cursor: pointer;
+}
+
+.video-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.video-controls-left,
+.video-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0 9px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.vc-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.vc-btn-fs {
+  padding: 0 12px;
+  background: rgba(225, 29, 72, 0.22);
+  border-color: rgba(244, 63, 94, 0.5);
+}
+
+.vc-btn-fs:hover {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.video-time-text {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.76rem;
+  color: rgba(255, 255, 255, 0.9);
+  margin-left: 4px;
+  white-space: nowrap;
 }
 
 .seek-feedback {
@@ -1447,8 +1639,8 @@ body {
 .video-smart-overlay {
   position: absolute;
   right: 16px;
-  bottom: 60px;
-  z-index: 26;
+  bottom: 86px;
+  z-index: 28;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -2446,7 +2638,27 @@ body {
   }
   .video-smart-overlay {
     right: 10px;
-    bottom: 50px;
+    bottom: 74px;
+  }
+  .custom-video-bar {
+    padding: 20px 10px 8px;
+    gap: 6px;
+  }
+  .vc-btn {
+    height: 30px;
+    min-width: 30px;
+    padding: 0 7px;
+    font-size: 0.72rem;
+  }
+  .vc-btn-text {
+    display: none;
+  }
+  .video-time-text {
+    font-size: 0.7rem;
+  }
+  .video-center-play {
+    width: 56px;
+    height: 56px;
   }
   .video-smart-btn {
     padding: 6px 11px;
@@ -2499,8 +2711,22 @@ html.tv-mode .continue-card,
 html.tv-mode .release-poster-wrap,
 html.tv-mode .modal-window,
 html.tv-mode .overlay-120-group,
+html.tv-mode .custom-video-bar,
+html.tv-mode .video-center-play,
+html.tv-mode .vc-btn,
 html.tv-mode .btn-primary {
   transition: none !important;
+}
+
+html.tv-mode .video-center-play {
+  box-shadow: none !important;
+}
+
+html.tv-mode .vc-btn {
+  height: 42px;
+  min-width: 42px;
+  padding: 0 13px;
+  font-size: 0.88rem;
 }
 
 html.tv-mode .release-poster-wrap,

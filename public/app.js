@@ -401,6 +401,22 @@ const playerOsd = document.getElementById('playerOsd');
 const directPlayerWrap = document.getElementById('directPlayerWrap');
 const videoStageArea = document.getElementById('videoStageArea');
 const html5Video = document.getElementById('html5Video');
+const videoCenterPlayBtn = document.getElementById('videoCenterPlayBtn');
+const customVideoBar = document.getElementById('customVideoBar');
+const videoProgressRange = document.getElementById('videoProgressRange');
+const vcPlayPauseBtn = document.getElementById('vcPlayPauseBtn');
+const vcPlayIcon = document.getElementById('vcPlayIcon');
+const vcPauseIcon = document.getElementById('vcPauseIcon');
+const vcBack5Btn = document.getElementById('vcBack5Btn');
+const vcFwd5Btn = document.getElementById('vcFwd5Btn');
+const vcMuteBtn = document.getElementById('vcMuteBtn');
+const vcVolIcon = document.getElementById('vcVolIcon');
+const vcMuteIcon = document.getElementById('vcMuteIcon');
+const videoTimeText = document.getElementById('videoTimeText');
+const vcFullscreenBtn = document.getElementById('vcFullscreenBtn');
+const vcFsEnterIcon = document.getElementById('vcFsEnterIcon');
+const vcFsExitIcon = document.getElementById('vcFsExitIcon');
+const vcFullscreenBtnText = document.getElementById('vcFullscreenBtnText');
 const seekFeedbackLeft = document.getElementById('seekFeedbackLeft');
 const seekFeedbackLeftText = document.getElementById('seekFeedbackLeftText');
 const seekFeedbackRight = document.getElementById('seekFeedbackRight');
@@ -418,6 +434,8 @@ const skip120Btn = document.getElementById('skip120Btn');
 const playbackSpeedSelect = document.getElementById('playbackSpeedSelect');
 const pipBtn = document.getElementById('pipBtn');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
+let isScrubbingVideo = false;
+let videoClickTimer = null;
 
 const iframePlayerWrap = document.getElementById('iframePlayerWrap');
 const balancerIframe = document.getElementById('balancerIframe');
@@ -1393,6 +1411,39 @@ function populateFilesTab(item) {
   });
 }
 
+function formatPlayerTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+function updateCustomVideoBar() {
+  if (!html5Video) return;
+  const paused = html5Video.paused || html5Video.ended;
+  if (vcPlayIcon) vcPlayIcon.classList.toggle('hidden', !paused);
+  if (vcPauseIcon) vcPauseIcon.classList.toggle('hidden', paused);
+  if (videoCenterPlayBtn) videoCenterPlayBtn.classList.toggle('hidden', !paused);
+
+  const muted = html5Video.muted || html5Video.volume === 0;
+  if (vcVolIcon) vcVolIcon.classList.toggle('hidden', muted);
+  if (vcMuteIcon) vcMuteIcon.classList.toggle('hidden', !muted);
+
+  const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
+  const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
+  if (videoTimeText) {
+    videoTimeText.textContent = `${formatPlayerTime(cur)} / ${formatPlayerTime(dur)}`;
+  }
+  if (videoProgressRange && !isScrubbingVideo) {
+    const ratio = dur > 0 ? Math.max(0, Math.min(1, cur / dur)) : 0;
+    videoProgressRange.value = String(Math.round(ratio * 1000));
+    videoProgressRange.style.setProperty('--pct', `${(ratio * 100).toFixed(2)}%`);
+  }
+}
+
 function showPlayerOsd(message) {
   playerOsd.textContent = message;
   playerOsd.classList.remove('hidden');
@@ -1521,6 +1572,7 @@ function seekRelative(deltaSeconds) {
   }
 
   showPlayerOsd(text);
+  updateCustomVideoBar();
   revealVideoOverlayControls();
   saveLivePlaybackProgress();
 }
@@ -1738,6 +1790,7 @@ function switchModalTab(tabName) {
 }
 
 function closeItemModal() {
+  exitVideoFullscreen();
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
   modalOpenToken++;
@@ -1747,6 +1800,7 @@ function closeItemModal() {
   if (seekStreakTimer) clearTimeout(seekStreakTimer);
   seekStreakDir = 0;
   seekStreakTotal = 0;
+  lastSmartOverlayKey = '';
   if (seekFeedbackLeft) seekFeedbackLeft.classList.add('hidden');
   if (seekFeedbackRight) seekFeedbackRight.classList.add('hidden');
   destroyHls();
@@ -1769,23 +1823,145 @@ function updateFavButtonState() {
   modalFavBtn.style.color = isFav ? 'var(--accent-ink)' : '';
 }
 
-function toggleVideoFullscreen() {
+function getFullscreenElement() {
+  return document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement ||
+    null;
+}
+
+function isVideoFullscreen() {
+  return Boolean(
+    getFullscreenElement() ||
+    (videoStageArea && videoStageArea.classList.contains('pseudo-fullscreen')) ||
+    (iframePlayerWrap && iframePlayerWrap.classList.contains('pseudo-fullscreen'))
+  );
+}
+
+function syncFullscreenUi() {
+  const fs = isVideoFullscreen();
+  if (videoStageArea) videoStageArea.classList.toggle('is-fullscreen', fs);
+  if (vcFsEnterIcon) vcFsEnterIcon.classList.toggle('hidden', fs);
+  if (vcFsExitIcon) vcFsExitIcon.classList.toggle('hidden', !fs);
+  if (vcFullscreenBtnText) vcFullscreenBtnText.textContent = fs ? '✕ Выйти' : 'На весь экран';
+  if (fullscreenBtn) fullscreenBtn.textContent = fs ? '✕ Выйти' : 'На весь экран';
+}
+
+function enterPseudoFullscreen(target) {
+  if (!target) return;
+  target.classList.add('pseudo-fullscreen');
+  document.body.classList.add('pseudo-fullscreen-open');
+  syncFullscreenUi();
+  revealVideoOverlayControls(3800);
+}
+
+function exitVideoFullscreen() {
+  if (videoStageArea) videoStageArea.classList.remove('pseudo-fullscreen');
+  if (iframePlayerWrap) iframePlayerWrap.classList.remove('pseudo-fullscreen');
+  document.body.classList.remove('pseudo-fullscreen-open');
+
+  if (getFullscreenElement()) {
+    const exitFn = document.exitFullscreen ||
+      document.webkitExitFullscreen ||
+      document.mozCancelFullScreen ||
+      document.msExitFullscreen;
+    if (exitFn) {
+      try {
+        const p = exitFn.call(document);
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch (e) {}
+    }
+  }
+  syncFullscreenUi();
+}
+
+function enterVideoFullscreen() {
   const target = directPlayerWrap.classList.contains('hidden')
     ? iframePlayerWrap
     : (videoStageArea || html5Video);
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-  } else if (target.requestFullscreen) {
-    target.requestFullscreen().catch(() => {
-      if (html5Video.webkitEnterFullscreen) html5Video.webkitEnterFullscreen();
-    });
-  } else if (html5Video.webkitEnterFullscreen) {
-    // iPhone Safari native video fullscreen
-    html5Video.webkitEnterFullscreen();
+  if (!target) return;
+
+  // On LG webOS / Smart TVs use instant full-viewport container mode so overlays, D-Pad & Back (461) never lag
+  if (isSmartTv) {
+    enterPseudoFullscreen(target);
+    return;
+  }
+
+  const reqFn = target.requestFullscreen ||
+    target.webkitRequestFullscreen ||
+    target.mozRequestFullScreen ||
+    target.msRequestFullscreen;
+
+  if (reqFn) {
+    try {
+      const p = reqFn.call(target);
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          setTimeout(() => {
+            if (!getFullscreenElement()) {
+              enterPseudoFullscreen(target);
+            } else {
+              syncFullscreenUi();
+              revealVideoOverlayControls(3800);
+            }
+          }, 50);
+        }).catch(() => enterPseudoFullscreen(target));
+        return;
+      }
+      setTimeout(() => {
+        if (!getFullscreenElement()) enterPseudoFullscreen(target);
+        else {
+          syncFullscreenUi();
+          revealVideoOverlayControls(3800);
+        }
+      }, 120);
+      return;
+    } catch (e) {
+      enterPseudoFullscreen(target);
+      return;
+    }
+  }
+  enterPseudoFullscreen(target);
+}
+
+function toggleVideoFullscreen() {
+  if (isVideoFullscreen()) {
+    exitVideoFullscreen();
+  } else {
+    enterVideoFullscreen();
   }
 }
 
 // Spatial TV D-Pad Navigation (LG webOS / Samsung Tizen / HTPC Linux)
+function getArrowDirection(e) {
+  if (e.key === 'ArrowUp' || e.key === 'Up' || e.keyCode === 38) return 'ArrowUp';
+  if (e.key === 'ArrowDown' || e.key === 'Down' || e.keyCode === 40) return 'ArrowDown';
+  if (e.key === 'ArrowLeft' || e.key === 'Left' || e.keyCode === 37) return 'ArrowLeft';
+  if (e.key === 'ArrowRight' || e.key === 'Right' || e.keyCode === 39) return 'ArrowRight';
+  return null;
+}
+
+function isConfirmKey(e) {
+  return e.key === 'Enter' || e.key === 'Select' || e.key === 'Accept' || e.keyCode === 13 || e.keyCode === 23;
+}
+
+function isBackKey(e) {
+  return e.key === 'Escape' || e.key === 'BrowserBack' || e.key === 'GoBack' || e.keyCode === 461 || e.keyCode === 10009;
+}
+
+function isTextEditingActive() {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') {
+    const t = (el.type || 'text').toLowerCase();
+    return t !== 'range' && t !== 'checkbox' && t !== 'radio' && t !== 'button' && t !== 'submit';
+  }
+  return false;
+}
+
 function clearTvFocus() {
   if (currentTvFocusedEl) {
     currentTvFocusedEl.classList.remove('tv-focus');
@@ -1794,30 +1970,61 @@ function clearTvFocus() {
 }
 
 function getVisibleFocusableWithRects() {
-  const scope = !parsersModal.classList.contains('hidden')
-    ? parsersModal
-    : (!itemModal.classList.contains('hidden') ? itemModal : document.body);
+  let scope = document.body;
+  if (isVideoFullscreen()) {
+    scope = directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : videoStageArea;
+  } else if (accountModal && !accountModal.classList.contains('hidden')) {
+    scope = accountModal;
+  } else if (!parsersModal.classList.contains('hidden')) {
+    scope = parsersModal;
+  } else if (!itemModal.classList.contains('hidden')) {
+    scope = itemModal;
+  }
 
   const result = [];
   for (const el of scope.querySelectorAll('.focusable')) {
-    if (el.offsetParent === null) continue;
+    if (el.disabled || el.closest('.hidden')) continue;
     const rect = el.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      result.push({ el, rect });
-    }
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    result.push({ el, rect });
   }
   return result;
 }
 
+function pickInitialTvFocus(candidates, direction) {
+  if (isVideoFullscreen() || (!itemModal.classList.contains('hidden') && state.activeTab === 'player')) {
+    const preferred = [
+      vcPlayPauseBtn,
+      videoCenterPlayBtn,
+      overlayNextEpBtn,
+      overlayForward120Btn,
+      vcFullscreenBtn
+    ];
+    for (const target of preferred) {
+      const match = candidates.find(c => c.el === target);
+      if (match) return match.el;
+    }
+  }
+  if (direction === 'ArrowDown' && itemModal.classList.contains('hidden')) {
+    const heroMatch = candidates.find(c => c.el === heroWatchBtn);
+    if (heroMatch) return heroMatch.el;
+    const cardMatch = candidates.find(c => c.el.classList.contains('release-card') || c.el.classList.contains('movie-card'));
+    if (cardMatch) return cardMatch.el;
+  }
+  const activeEntry = candidates.find(c => c.el === document.activeElement);
+  return (activeEntry || candidates[0]).el;
+}
+
 function moveSpatialFocus(direction) {
+  if (isVideoFullscreen() || (!itemModal.classList.contains('hidden') && state.activeTab === 'player')) {
+    revealVideoOverlayControls(4500);
+  }
   const candidates = getVisibleFocusableWithRects();
   if (candidates.length === 0) return;
 
   const currentEntry = currentTvFocusedEl ? candidates.find(c => c.el === currentTvFocusedEl) : null;
   if (!currentEntry) {
-    const activeEl = document.activeElement;
-    const activeEntry = candidates.find(c => c.el === activeEl) || candidates[0];
-    currentTvFocusedEl = activeEntry.el;
+    currentTvFocusedEl = pickInitialTvFocus(candidates, direction);
     currentTvFocusedEl.classList.add('tv-focus');
     currentTvFocusedEl.focus({ preventScroll: true });
     currentTvFocusedEl.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
@@ -1839,29 +2046,37 @@ function moveSpatialFocus(direction) {
     const dy = cy - curCy;
 
     let valid = false;
-    let primaryDist = 0;
-    let secondaryDist = 0;
+    let primaryEdgeDist = 0;
+    let perpPenalty = 0;
 
-    if (direction === 'ArrowRight' && dx > 12) {
+    if (direction === 'ArrowRight' && dx > 6) {
       valid = true;
-      primaryDist = dx;
-      secondaryDist = Math.abs(dy);
-    } else if (direction === 'ArrowLeft' && dx < -12) {
+      primaryEdgeDist = Math.max(0, r.left - curRect.right) + dx * 0.25;
+      const vertOverlap = Math.max(0, Math.min(curRect.bottom, r.bottom) - Math.max(curRect.top, r.top));
+      const edgeGapY = Math.max(0, r.top - curRect.bottom, curRect.top - r.bottom);
+      perpPenalty = vertOverlap > 0 ? Math.abs(dy) * 0.35 : (edgeGapY * 2.8 + Math.abs(dy) * 0.6);
+    } else if (direction === 'ArrowLeft' && dx < -6) {
       valid = true;
-      primaryDist = -dx;
-      secondaryDist = Math.abs(dy);
-    } else if (direction === 'ArrowDown' && dy > 12) {
+      primaryEdgeDist = Math.max(0, curRect.left - r.right) + (-dx) * 0.25;
+      const vertOverlap = Math.max(0, Math.min(curRect.bottom, r.bottom) - Math.max(curRect.top, r.top));
+      const edgeGapY = Math.max(0, r.top - curRect.bottom, curRect.top - r.bottom);
+      perpPenalty = vertOverlap > 0 ? Math.abs(dy) * 0.35 : (edgeGapY * 2.8 + Math.abs(dy) * 0.6);
+    } else if (direction === 'ArrowDown' && dy > 6) {
       valid = true;
-      primaryDist = dy;
-      secondaryDist = Math.abs(dx);
-    } else if (direction === 'ArrowUp' && dy < -12) {
+      primaryEdgeDist = Math.max(0, r.top - curRect.bottom) + dy * 0.25;
+      const horizOverlap = Math.max(0, Math.min(curRect.right, r.right) - Math.max(curRect.left, r.left));
+      const edgeGapX = Math.max(0, r.left - curRect.right, curRect.left - r.right);
+      perpPenalty = horizOverlap > 0 ? Math.abs(dx) * 0.35 : (edgeGapX * 2.6 + Math.abs(dx) * 0.5);
+    } else if (direction === 'ArrowUp' && dy < -6) {
       valid = true;
-      primaryDist = -dy;
-      secondaryDist = Math.abs(dx);
+      primaryEdgeDist = Math.max(0, curRect.top - r.bottom) + (-dy) * 0.25;
+      const horizOverlap = Math.max(0, Math.min(curRect.right, r.right) - Math.max(curRect.left, r.left));
+      const edgeGapX = Math.max(0, r.left - curRect.right, curRect.left - r.right);
+      perpPenalty = horizOverlap > 0 ? Math.abs(dx) * 0.35 : (edgeGapX * 2.6 + Math.abs(dx) * 0.5);
     }
 
     if (!valid) continue;
-    const score = primaryDist + secondaryDist * 2.2;
+    const score = primaryEdgeDist + perpPenalty;
     if (score < bestScore) {
       bestScore = score;
       bestEl = el;
@@ -2127,8 +2342,62 @@ pipBtn.addEventListener('click', async () => {
 
 fullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
+function togglePlayPauseVideo() {
+  if (!html5Video) return;
+  if (html5Video.paused || html5Video.ended) {
+    html5Video.play().catch(() => {});
+  } else {
+    html5Video.pause();
+  }
+  updateCustomVideoBar();
+  revealVideoOverlayControls(3200);
+}
+
+if (vcPlayPauseBtn) vcPlayPauseBtn.addEventListener('click', togglePlayPauseVideo);
+if (videoCenterPlayBtn) videoCenterPlayBtn.addEventListener('click', togglePlayPauseVideo);
+if (vcBack5Btn) vcBack5Btn.addEventListener('click', () => seekRelative(-5));
+if (vcFwd5Btn) vcFwd5Btn.addEventListener('click', () => seekRelative(5));
+if (vcFullscreenBtn) vcFullscreenBtn.addEventListener('click', toggleVideoFullscreen);
+
+if (vcMuteBtn) {
+  vcMuteBtn.addEventListener('click', () => {
+    html5Video.muted = !html5Video.muted;
+    updateCustomVideoBar();
+    showPlayerOsd(html5Video.muted ? 'Звук выключен' : 'Звук включён');
+    revealVideoOverlayControls(3200);
+  });
+}
+
+if (videoProgressRange) {
+  videoProgressRange.addEventListener('input', () => {
+    isScrubbingVideo = true;
+    const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
+    const ratio = Number(videoProgressRange.value) / 1000;
+    videoProgressRange.style.setProperty('--pct', `${(ratio * 100).toFixed(2)}%`);
+    if (videoTimeText && dur > 0) {
+      videoTimeText.textContent = `${formatPlayerTime(ratio * dur)} / ${formatPlayerTime(dur)}`;
+    }
+    revealVideoOverlayControls(3500);
+  });
+  videoProgressRange.addEventListener('change', () => {
+    const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
+    if (dur > 0) {
+      const target = (Number(videoProgressRange.value) / 1000) * dur;
+      html5Video.currentTime = target;
+    }
+    isScrubbingVideo = false;
+    updateSmartVideoOverlay();
+    updateCustomVideoBar();
+    saveLivePlaybackProgress();
+  });
+}
+
+document.addEventListener('fullscreenchange', syncFullscreenUi);
+document.addEventListener('webkitfullscreenchange', syncFullscreenUi);
+
 html5Video.addEventListener('timeupdate', () => {
   updateSmartVideoOverlay();
+  updateCustomVideoBar();
   const now = Date.now();
   if (now - lastHistorySaveTs >= 5000) {
     lastHistorySaveTs = now;
@@ -2136,17 +2405,22 @@ html5Video.addEventListener('timeupdate', () => {
   }
 });
 
-['loadedmetadata', 'durationchange', 'seeked'].forEach(evt => {
-  html5Video.addEventListener(evt, updateSmartVideoOverlay);
+['seeking', 'loadedmetadata', 'durationchange', 'seeked', 'volumechange'].forEach(evt => {
+  html5Video.addEventListener(evt, () => {
+    updateSmartVideoOverlay();
+    updateCustomVideoBar();
+  });
 });
 
 html5Video.addEventListener('play', () => {
   updateSmartVideoOverlay();
+  updateCustomVideoBar();
   revealVideoOverlayControls(2800);
 });
 
 html5Video.addEventListener('pause', () => {
   updateSmartVideoOverlay();
+  updateCustomVideoBar();
   if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
   if (videoStageArea) videoStageArea.classList.add('controls-active');
   saveLivePlaybackProgress();
@@ -2154,6 +2428,7 @@ html5Video.addEventListener('pause', () => {
 });
 
 html5Video.addEventListener('ended', () => {
+  updateCustomVideoBar();
   saveLivePlaybackProgress();
   switchEpisodeStep(1, 'Автопереход');
 });
@@ -2169,23 +2444,35 @@ if (videoStageArea) {
   });
   videoStageArea.addEventListener('touchstart', () => revealVideoOverlayControls(), { passive: true });
 
+  videoStageArea.addEventListener('click', e => {
+    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+      return;
+    }
+    if (e.pointerType === 'touch') return;
+    if (videoClickTimer) clearTimeout(videoClickTimer);
+    videoClickTimer = setTimeout(() => {
+      videoClickTimer = null;
+      togglePlayPauseVideo();
+    }, 220);
+  });
+
   videoStageArea.addEventListener('touchend', e => {
-    if (e.target.closest('.video-smart-overlay')) return;
+    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+      return;
+    }
     const rect = videoStageArea.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const touch = e.changedTouches && e.changedTouches[0];
     if (!touch) return;
     const x = touch.clientX - rect.left;
     const y = touch.clientY - rect.top;
-    // Ignore taps on bottom native controls strip
-    if (y > rect.height - 54) return;
+    if (y > rect.height - 80) return;
     const xRatio = x / rect.width;
     const side = xRatio < 0.4 ? -1 : (xRatio > 0.6 ? 1 : 0);
-    if (side === 0) return;
 
     const now = Date.now();
     const windowMs = seekStreakDir === side ? 650 : 320;
-    if (lastTouchTapSide === side && (now - lastTouchTapTime) <= windowMs) {
+    if (side !== 0 && lastTouchTapSide === side && (now - lastTouchTapTime) <= windowMs) {
       if (e.cancelable) e.preventDefault();
       seekRelative(side * 5);
       lastTouchTapTime = now;
@@ -2193,20 +2480,27 @@ if (videoStageArea) {
     } else {
       lastTouchTapTime = now;
       lastTouchTapSide = side;
+      revealVideoOverlayControls(3200);
     }
   }, { passive: false });
 
   videoStageArea.addEventListener('dblclick', e => {
-    if (e.target.closest('.video-smart-overlay')) return;
+    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+      return;
+    }
+    if (videoClickTimer) {
+      clearTimeout(videoClickTimer);
+      videoClickTimer = null;
+    }
     const rect = videoStageArea.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    if (y > rect.height - 54) return;
     const xRatio = x / rect.width;
+    e.preventDefault();
     if (xRatio < 0.35 || xRatio > 0.65) {
-      e.preventDefault();
       seekRelative(xRatio < 0.5 ? -5 : 5);
+    } else {
+      toggleVideoFullscreen();
     }
   });
 }
@@ -2224,28 +2518,9 @@ parsersModal.addEventListener('click', e => {
   if (e.target === parsersModal) parsersModal.classList.add('hidden');
 });
 
-// Capture-phase ArrowLeft/ArrowRight 5s seek when direct player is active on PC
+// Unified Capture-Phase Keyboard & Smart TV Remote Navigation (D-Pad Ring, Back=461/10009, Media Keys)
 document.addEventListener('keydown', e => {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  const tag = document.activeElement?.tagName;
-  const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-  if (isTyping) return;
-  if (
-    !itemModal.classList.contains('hidden') &&
-    state.activeTab === 'player' &&
-    !directPlayerWrap.classList.contains('hidden') &&
-    !currentTvFocusedEl
-  ) {
-    e.preventDefault();
-    e.stopPropagation();
-    seekRelative(e.key === 'ArrowRight' ? 5 : -5);
-  }
-}, true);
-
-// Global Keyboard & Smart TV Remote Control (webOS Back=461, Tizen Back=10009, Media Keys)
-document.addEventListener('keydown', e => {
-  const tag = document.activeElement?.tagName;
-  const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  const isTyping = isTextEditingActive();
 
   // Quick search focus
   if (e.key === '/' && !isTyping && itemModal.classList.contains('hidden')) {
@@ -2254,55 +2529,63 @@ document.addEventListener('keydown', e => {
     return;
   }
 
-  // Back / Escape handling (PC Escape, LG webOS 461, Samsung Tizen 10009)
-  if (e.key === 'Escape' || e.keyCode === 461 || e.keyCode === 10009) {
+  // Back / Escape handling: first exit fullscreen, then close top-most modal
+  if (isBackKey(e)) {
+    if (isVideoFullscreen()) {
+      e.preventDefault();
+      e.stopPropagation();
+      exitVideoFullscreen();
+      return;
+    }
     if (accountModal && !accountModal.classList.contains('hidden')) {
       e.preventDefault();
+      e.stopPropagation();
       accountModal.classList.add('hidden');
       return;
     }
     if (!parsersModal.classList.contains('hidden')) {
       e.preventDefault();
+      e.stopPropagation();
       parsersModal.classList.add('hidden');
       return;
     }
     if (!itemModal.classList.contains('hidden')) {
       e.preventDefault();
+      e.stopPropagation();
       closeItemModal();
       return;
     }
   }
 
-  // Media Player Controls (Play/Pause, Seek, Fullscreen)
+  // Media Player Hotkeys (Play/Pause, Seek, Fullscreen)
   if (!itemModal.classList.contains('hidden') && state.activeTab === 'player' && !isTyping) {
     if (e.key === ' ' || e.key === 'k' || e.key === 'MediaPlayPause' || e.keyCode === 179) {
       if (document.activeElement?.tagName !== 'BUTTON') {
         e.preventDefault();
-        if (html5Video.paused) html5Video.play().catch(() => {});
-        else html5Video.pause();
+        togglePlayPauseVideo();
         return;
       }
     }
     if (e.keyCode === 415) { // TV Play
       e.preventDefault();
       html5Video.play().catch(() => {});
+      updateCustomVideoBar();
       return;
     }
     if (e.keyCode === 19) { // TV Pause
       e.preventDefault();
       html5Video.pause();
+      updateCustomVideoBar();
       return;
     }
     if (e.keyCode === 417) { // TV FastForward
       e.preventDefault();
-      html5Video.currentTime = Math.min(html5Video.duration || 0, (html5Video.currentTime || 0) + 15);
-      showPlayerOsd('+15 сек');
+      seekRelative(15);
       return;
     }
     if (e.keyCode === 412) { // TV Rewind
       e.preventDefault();
-      html5Video.currentTime = Math.max(0, (html5Video.currentTime || 0) - 15);
-      showPlayerOsd('-15 сек');
+      seekRelative(-15);
       return;
     }
     if (e.key === 'f' || e.key === 'F') {
@@ -2312,24 +2595,44 @@ document.addEventListener('keydown', e => {
     }
   }
 
-  // D-Pad Arrow Key Spatial Navigation
-  if (!isTyping && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-    // If video itself is focused and user presses left/right, seek 10s
-    if (document.activeElement === html5Video && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+  // D-Pad Arrow Keys (5s quick seek when watching without TV focus, otherwise spatial D-Pad ring navigation)
+  const dir = getArrowDirection(e);
+  if (dir && !isTyping) {
+    const inPlayerDirect =
+      !itemModal.classList.contains('hidden') &&
+      state.activeTab === 'player' &&
+      !directPlayerWrap.classList.contains('hidden');
+
+    if (inPlayerDirect && !currentTvFocusedEl && (dir === 'ArrowLeft' || dir === 'ArrowRight')) {
+      e.preventDefault();
+      e.stopPropagation();
+      seekRelative(dir === 'ArrowRight' ? 5 : -5);
       return;
     }
+
     e.preventDefault();
-    moveSpatialFocus(e.key);
+    e.stopPropagation();
+    moveSpatialFocus(dir);
     return;
   }
 
-  if (!isTyping && e.key === 'Enter' && currentTvFocusedEl) {
-    if (document.activeElement !== currentTvFocusedEl) {
+  // OK / Enter on focused TV element (cards, chips, overlay buttons, select dropdowns)
+  if (!isTyping && isConfirmKey(e) && currentTvFocusedEl) {
+    if (currentTvFocusedEl.tagName === 'SELECT') {
       e.preventDefault();
-      currentTvFocusedEl.click();
+      e.stopPropagation();
+      const sel = currentTvFocusedEl;
+      if (sel.options.length > 0) {
+        sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      return;
     }
+    e.preventDefault();
+    e.stopPropagation();
+    currentTvFocusedEl.click();
   }
-});
+}, true);
 
 // Account & Cross-Device Sync Listeners
 function setAuthTabMode(mode) {
