@@ -1856,7 +1856,13 @@ function enterPseudoFullscreen(target) {
   revealVideoOverlayControls(3800);
 }
 
+let pendingFsFallbackTimer = null;
+
 function exitVideoFullscreen() {
+  if (pendingFsFallbackTimer) {
+    clearTimeout(pendingFsFallbackTimer);
+    pendingFsFallbackTimer = null;
+  }
   if (videoStageArea) videoStageArea.classList.remove('pseudo-fullscreen');
   if (iframePlayerWrap) iframePlayerWrap.classList.remove('pseudo-fullscreen');
   document.body.classList.remove('pseudo-fullscreen-open');
@@ -1882,6 +1888,11 @@ function enterVideoFullscreen() {
     : (videoStageArea || html5Video);
   if (!target) return;
 
+  if (pendingFsFallbackTimer) {
+    clearTimeout(pendingFsFallbackTimer);
+    pendingFsFallbackTimer = null;
+  }
+
   // On LG webOS / Smart TVs use instant full-viewport container mode so overlays, D-Pad & Back (461) never lag
   if (isSmartTv) {
     enterPseudoFullscreen(target);
@@ -1894,30 +1905,39 @@ function enterVideoFullscreen() {
     target.msRequestFullscreen;
 
   if (reqFn) {
+    pendingFsFallbackTimer = setTimeout(() => {
+      pendingFsFallbackTimer = null;
+      if (!isVideoFullscreen()) enterPseudoFullscreen(target);
+    }, 250);
     try {
       const p = reqFn.call(target);
       if (p && typeof p.then === 'function') {
         p.then(() => {
-          setTimeout(() => {
-            if (!getFullscreenElement()) {
-              enterPseudoFullscreen(target);
-            } else {
-              syncFullscreenUi();
-              revealVideoOverlayControls(3800);
-            }
-          }, 50);
-        }).catch(() => enterPseudoFullscreen(target));
+          if (pendingFsFallbackTimer) {
+            clearTimeout(pendingFsFallbackTimer);
+            pendingFsFallbackTimer = null;
+          }
+          if (!getFullscreenElement()) {
+            enterPseudoFullscreen(target);
+          } else {
+            syncFullscreenUi();
+            revealVideoOverlayControls(3800);
+          }
+        }).catch(() => {
+          if (pendingFsFallbackTimer) {
+            clearTimeout(pendingFsFallbackTimer);
+            pendingFsFallbackTimer = null;
+          }
+          enterPseudoFullscreen(target);
+        });
         return;
       }
-      setTimeout(() => {
-        if (!getFullscreenElement()) enterPseudoFullscreen(target);
-        else {
-          syncFullscreenUi();
-          revealVideoOverlayControls(3800);
-        }
-      }, 120);
       return;
     } catch (e) {
+      if (pendingFsFallbackTimer) {
+        clearTimeout(pendingFsFallbackTimer);
+        pendingFsFallbackTimer = null;
+      }
       enterPseudoFullscreen(target);
       return;
     }
