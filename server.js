@@ -1460,9 +1460,14 @@ function getAuthTokenFromReq(req) {
   if (authHeader.startsWith('Bearer ')) {
     return authHeader.slice(7).trim();
   }
+  try {
+    const qToken = new URL(req.url, 'http://localhost').searchParams.get('token');
+    if (qToken) return qToken.trim();
+  } catch (e) {}
   const cookieHeader = req.headers['cookie'] || '';
   const match = cookieHeader.match(/(?:^|;\s*)spbguka_token=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : '';
+  if (match) return decodeURIComponent(match[1]);
+  return '';
 }
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
@@ -1879,6 +1884,321 @@ function setAuthCookie(res, token) {
   res.setHeader('Set-Cookie', `spbguka_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax`);
 }
 
+// --- Watch Party / Lobby System (Max 20 Participants, Host Sync, Optional Chat, Live Server Presence) ---
+const MAX_LOBBY_PARTICIPANTS = 20;
+const MAX_LOBBY_CHAT_MESSAGES = 80;
+const PRESENCE_TTL_MS = 35000;
+
+const onlineUsers = new Map(); // usernameLower -> { username, usernameLower, lastSeenAt, lobbyId, sseClients: Set }
+const lobbies = new Map(); // lobbyId -> Lobby
+const pendingInvitesByUser = new Map(); // targetLower -> Map<lobbyId, { lobbyId, lobbyName, fromUsername, createdAt }>
+let presenceBroadcastTimer = null;
+
+function generateLobbyCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let attempt = 0; attempt < 16; attempt++) {
+    let code = '';
+    const bytes = crypto.randomBytes(6);
+    for (let i = 0; i < 6; i++) code += alphabet[bytes[i] % alphabet.length];
+    if (!lobbies.has(code)) return code;
+  }
+  return `L${Date.now().toString(36).toUpperCase().slice(-5)}`;
+}
+
+function getOrCreateOnlineEntry(user) {
+  const key = user.usernameLower;
+  let entry = onlineUsers.get(key);
+  if (!entry) {
+    entry = {
+      username: user.username,
+      usernameLower: key,
+      lastSeenAt: Date.now(),
+      lobbyId: '',
+      sseClients: new Set()
+    };
+    onlineUsers.set(key, entry);
+  }
+  entry.username = user.username;
+  entry.lastSeenAt = Date.now();
+  return entry;
+}
+
+function touchUserPresence(user) {
+  if (!user || !user.usernameLower) return null;
+  return getOrCreateOnlineEntry(user);
+}
+
+function isUserOnline(usernameLower) {
+  const entry = onlineUsers.get(usernameLower);
+  if (!entry) return false;
+  if (entry.sseClients.size > 0) return true;
+  return (Date.now() - entry.lastSeenAt) < PRESENCE_TTL_MS;
+}
+
+function getUserLobby(usernameLower) {
+  const entry = onlineUsers.get(usernameLower);
+  if (entry && entry.lobbyId && lobbies.has(entry.lobbyId)) {
+    const lobby = lobbies.get(entry.lobbyId);
+    if (lobby.members.has(usernameLower)) return lobby;
+  }
+  for (const lobby of lobbies.values()) {
+    if (lobby.members.has(usernameLower)) {
+      if (entry) entry.lobbyId = lobby.id;
+      return lobby;
+    }
+  }
+  if (entry) entry.lobbyId = '';
+  return null;
+}
+
+function sendSseEvent(res, eventName, payload) {
+  try {
+    if (res.writableEnded || res.destroyed) return false;
+    res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function sendSseToUser(usernameLower, eventName, payload) {
+  const entry = onlineUsers.get(usernameLower);
+  if (!entry || entry.sseClients.size === 0) return;
+  for (const clientRes of [...entry.sseClients]) {
+    if (!sendSseEvent(clientRes, eventName, payload)) {
+      entry.sseClients.delete(clientRes);
+    }
+  }
+}
+
+function broadcastToLobby(lobby, eventName, payloadFactory, excludeLower = '') {
+  if (!lobby) return;
+  for (const memberLower of lobby.members.keys()) {
+    if (excludeLower && memberLower === excludeLower) continue;
+    const payload = typeof payloadFactory === 'function' ? payloadFactory(memberLower) : payloadFactory;
+    sendSseToUser(memberLower, eventName, payload);
+  }
+}
+
+function schedulePresenceBroadcast() {
+  if (presenceBroadcastTimer) return;
+  presenceBroadcastTimer = setTimeout(() => {
+    presenceBroadcastTimer = null;
+    const onlineCount = Array.from(onlineUsers.keys()).filter(isUserOnline).length;
+    for (const [k, entry] of onlineUsers.entries()) {
+      if (entry.sseClients.size === 0) continue;
+      sendSseToUser(k, 'presence_pulse', { onlineCount, serverNow: Date.now() });
+    }
+  }, 900);
+}
+
+function sanitizeLobbyMediaItem(raw) {
+  if (!raw || typeof raw !== 'object' || !(raw.imdbId || raw.id)) return null;
+  const imdbId = String(raw.imdbId || raw.id).slice(0, 64);
+  return {
+    id: imdbId,
+    imdbId,
+    kpId: raw.kpId ? String(raw.kpId).slice(0, 32) : '',
+    title: String(raw.title || 'Без названия').slice(0, 160),
+    originalTitle: String(raw.originalTitle || '').slice(0, 160),
+    type: String(raw.type || 'movie').slice(0, 20),
+    year: Number(raw.year) || 2024,
+    yearRange: raw.yearRange ? String(raw.yearRange).slice(0, 32) : '',
+    ratingKp: raw.ratingKp ?? null,
+    ratingImdb: raw.ratingImdb ?? null,
+    poster: String(raw.poster || '').slice(0, 500),
+    backdrop: String(raw.backdrop || '').slice(0, 500),
+    genres: Array.isArray(raw.genres) ? raw.genres.slice(0, 5).map(String) : ['Кино'],
+    voices: Array.isArray(raw.voices) ? raw.voices.slice(0, 15).map(String) : ['Рус. Дублированный'],
+    description: String(raw.description || '').slice(0, 800)
+  };
+}
+
+function serializeLobbyForUser(lobby, viewerLower) {
+  if (!lobby) return null;
+  const members = Array.from(lobby.members.values()).map(m => ({
+    username: m.username,
+    isHost: m.usernameLower === lobby.hostLower,
+    online: isUserOnline(m.usernameLower),
+    joinedAt: m.joinedAt
+  }));
+  members.sort((a, b) => (Number(b.isHost) - Number(a.isHost)) || (Number(b.online) - Number(a.online)) || (a.joinedAt - b.joinedAt));
+
+  return {
+    id: lobby.id,
+    name: lobby.name,
+    hostUsername: lobby.hostUsername,
+    isHost: lobby.hostLower === viewerLower,
+    maxParticipants: MAX_LOBBY_PARTICIPANTS,
+    memberCount: lobby.members.size,
+    createdAt: lobby.createdAt,
+    members,
+    playback: lobby.playback,
+    messages: lobby.messages.slice(-MAX_LOBBY_CHAT_MESSAGES),
+    serverNow: Date.now()
+  };
+}
+
+function getPendingInvitesForUser(usernameLower) {
+  const map = pendingInvitesByUser.get(usernameLower);
+  if (!map || map.size === 0) return [];
+  const out = [];
+  for (const [lobbyId, inv] of map.entries()) {
+    const lobby = lobbies.get(lobbyId);
+    if (!lobby) {
+      map.delete(lobbyId);
+      continue;
+    }
+    out.push({
+      lobbyId,
+      lobbyName: lobby.name,
+      fromUsername: inv.fromUsername,
+      memberCount: lobby.members.size,
+      maxParticipants: MAX_LOBBY_PARTICIPANTS,
+      createdAt: inv.createdAt
+    });
+  }
+  return out.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function cleanupInvitesForLobby(lobbyId) {
+  for (const [targetLower, map] of pendingInvitesByUser.entries()) {
+    if (map.delete(lobbyId)) {
+      if (map.size === 0) pendingInvitesByUser.delete(targetLower);
+      sendSseToUser(targetLower, 'invites_update', { invites: getPendingInvitesForUser(targetLower) });
+    }
+  }
+}
+
+function appendLobbyMessage(lobby, msg) {
+  lobby.messages.push(msg);
+  if (lobby.messages.length > MAX_LOBBY_CHAT_MESSAGES) {
+    lobby.messages = lobby.messages.slice(-MAX_LOBBY_CHAT_MESSAGES);
+  }
+  broadcastToLobby(lobby, 'chat_message', { lobbyId: lobby.id, message: msg });
+}
+
+function closeLobbyRoom(lobby, reason = 'Главный закрыл лобби') {
+  if (!lobby || !lobbies.has(lobby.id)) return;
+  const memberKeys = Array.from(lobby.members.keys());
+  lobbies.delete(lobby.id);
+  for (const mKey of memberKeys) {
+    const entry = onlineUsers.get(mKey);
+    if (entry && entry.lobbyId === lobby.id) entry.lobbyId = '';
+    sendSseToUser(mKey, 'lobby_closed', { lobbyId: lobby.id, reason });
+  }
+  cleanupInvitesForLobby(lobby.id);
+  schedulePresenceBroadcast();
+}
+
+function removeMemberFromLobby(lobby, memberLower, reasonText = '') {
+  if (!lobby || !lobby.members.has(memberLower)) return;
+  const removed = lobby.members.get(memberLower);
+  lobby.members.delete(memberLower);
+  const onlineEntry = onlineUsers.get(memberLower);
+  if (onlineEntry && onlineEntry.lobbyId === lobby.id) onlineEntry.lobbyId = '';
+
+  if (lobby.members.size === 0) {
+    lobbies.delete(lobby.id);
+    cleanupInvitesForLobby(lobby.id);
+    schedulePresenceBroadcast();
+    return;
+  }
+
+  let newHostNote = '';
+  if (lobby.hostLower === memberLower) {
+    const remaining = Array.from(lobby.members.values());
+    remaining.sort((a, b) => (Number(isUserOnline(b.usernameLower)) - Number(isUserOnline(a.usernameLower))) || (a.joinedAt - b.joinedAt));
+    const nextHost = remaining[0];
+    lobby.hostLower = nextHost.usernameLower;
+    lobby.hostUsername = nextHost.username;
+    newHostNote = ` • Новый главный: ${nextHost.username}`;
+  }
+
+  appendLobbyMessage(lobby, {
+    id: crypto.randomBytes(6).toString('hex'),
+    type: 'system',
+    username: 'Система',
+    text: `${removed.username} ${reasonText || 'вышел из лобби'}${newHostNote}`,
+    ts: Date.now()
+  });
+
+  broadcastToLobby(lobby, 'lobby_update', viewerLower => ({
+    lobby: serializeLobbyForUser(lobby, viewerLower)
+  }));
+  schedulePresenceBroadcast();
+}
+
+async function listKnownUsers(query = '', limit = 30, viewerLower = '') {
+  const qLower = String(query || '').trim().toLowerCase();
+  const byKey = new Map();
+
+  for (const [k, entry] of onlineUsers.entries()) {
+    if (!isUserOnline(k)) continue;
+    if (qLower && !k.includes(qLower) && !entry.username.toLowerCase().includes(qLower)) continue;
+    byKey.set(k, {
+      username: entry.username,
+      usernameLower: k,
+      online: true,
+      lobbyId: entry.lobbyId || ''
+    });
+  }
+
+  try {
+    if (pgPool) {
+      const r = qLower
+        ? await pgPool.query(
+            'SELECT username, username_lower FROM spbguka_users WHERE username_lower LIKE $1 ORDER BY updated_at DESC LIMIT $2',
+            [`%${qLower}%`, limit]
+          )
+        : await pgPool.query(
+            'SELECT username, username_lower FROM spbguka_users ORDER BY updated_at DESC LIMIT $1',
+            [limit]
+          );
+      for (const row of r.rows) {
+        if (!byKey.has(row.username_lower)) {
+          const onlineEntry = onlineUsers.get(row.username_lower);
+          byKey.set(row.username_lower, {
+            username: row.username,
+            usernameLower: row.username_lower,
+            online: isUserOnline(row.username_lower),
+            lobbyId: onlineEntry?.lobbyId || ''
+          });
+        }
+      }
+    } else {
+      const entries = Object.values(accountsDb.users || {});
+      for (const u of entries) {
+        if (qLower && !u.usernameLower.includes(qLower) && !u.username.toLowerCase().includes(qLower)) continue;
+        if (!byKey.has(u.usernameLower)) {
+          const onlineEntry = onlineUsers.get(u.usernameLower);
+          byKey.set(u.usernameLower, {
+            username: u.username,
+            usernameLower: u.usernameLower,
+            online: isUserOnline(u.usernameLower),
+            lobbyId: onlineEntry?.lobbyId || ''
+          });
+        }
+      }
+    }
+  } catch (e) {}
+
+  return Array.from(byKey.values())
+    .filter(u => u.usernameLower !== viewerLower)
+    .sort((a, b) => (Number(b.online) - Number(a.online)) || a.username.localeCompare(b.username, 'ru'))
+    .slice(0, limit);
+}
+
+// Periodically prune stale offline presence entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, entry] of onlineUsers.entries()) {
+    if (entry.sseClients.size === 0 && (now - entry.lastSeenAt) > PRESENCE_TTL_MS * 2) {
+      onlineUsers.delete(k);
+    }
+  }
+}, 30000);
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = parsedUrl.pathname;
@@ -1994,6 +2314,429 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, user: publicUserPayload(user) }, req);
     } catch (e) {
       return sendJson(res, 400, { error: 'Ошибка синхронизации' }, req);
+    }
+  }
+
+  // --- Watch Party / Lobby Routes ---
+  if (pathname === '/api/lobby/events' && req.method === 'GET') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return sendJson(res, 401, { error: 'Войдите в аккаунт для подключения к лобби' }, req);
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      'Access-Control-Allow-Origin': '*'
+    });
+
+    const entry = getOrCreateOnlineEntry(user);
+    entry.sseClients.add(res);
+    const activeLobby = getUserLobby(user.usernameLower);
+
+    sendSseEvent(res, 'init', {
+      username: user.username,
+      serverNow: Date.now(),
+      lobby: activeLobby ? serializeLobbyForUser(activeLobby, user.usernameLower) : null,
+      invites: getPendingInvitesForUser(user.usernameLower),
+      onlineCount: Array.from(onlineUsers.keys()).filter(isUserOnline).length
+    });
+    schedulePresenceBroadcast();
+
+    const pingInterval = setInterval(() => {
+      entry.lastSeenAt = Date.now();
+      try {
+        if (!res.writableEnded && !res.destroyed) res.write(': ping\n\n');
+      } catch (e) {}
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(pingInterval);
+      entry.sseClients.delete(res);
+      entry.lastSeenAt = Date.now();
+      schedulePresenceBroadcast();
+    });
+    return;
+  }
+
+  if (pathname === '/api/lobby/users' && req.method === 'GET') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    touchUserPresence(user);
+    const q = parsedUrl.searchParams.get('q') || '';
+    const lobby = getUserLobby(user.usernameLower);
+    const known = await listKnownUsers(q, 30, user.usernameLower);
+    const users = known.map(u => {
+      const targetInvites = pendingInvitesByUser.get(u.usernameLower);
+      return {
+        username: u.username,
+        online: u.online,
+        inThisLobby: Boolean(lobby && lobby.members.has(u.usernameLower)),
+        inAnotherLobby: Boolean(u.lobbyId && (!lobby || u.lobbyId !== lobby.id)),
+        invited: Boolean(lobby && targetInvites && targetInvites.has(lobby.id))
+      };
+    });
+    const onlineTotal = Array.from(onlineUsers.keys()).filter(isUserOnline).length;
+    return sendJson(res, 200, { users, onlineTotal, serverNow: Date.now() }, req);
+  }
+
+  if (pathname === '/api/lobby/state' && req.method === 'GET') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    touchUserPresence(user);
+    const lobby = getUserLobby(user.usernameLower);
+    return sendJson(res, 200, {
+      lobby: lobby ? serializeLobbyForUser(lobby, user.usernameLower) : null,
+      invites: getPendingInvitesForUser(user.usernameLower),
+      onlineTotal: Array.from(onlineUsers.keys()).filter(isUserOnline).length,
+      serverNow: Date.now()
+    }, req);
+  }
+
+  if (pathname === '/api/lobby/create' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Войдите в аккаунт, чтобы создать лобби' }, req);
+    try {
+      const body = await readJsonBody(req);
+      touchUserPresence(user);
+      const oldLobby = getUserLobby(user.usernameLower);
+      if (oldLobby) {
+        if (oldLobby.hostLower === user.usernameLower) {
+          closeLobbyRoom(oldLobby, 'Главный создал новое лобби');
+        } else {
+          removeMemberFromLobby(oldLobby, user.usernameLower, 'вышел из лобби');
+        }
+      }
+
+      const rawName = String(body.name || '').trim().slice(0, 40);
+      const lobbyName = rawName.length >= 2 ? rawName : `Лобби ${user.username}`;
+      const lobbyId = generateLobbyCode();
+      const now = Date.now();
+      const lobby = {
+        id: lobbyId,
+        name: lobbyName,
+        hostLower: user.usernameLower,
+        hostUsername: user.username,
+        createdAt: now,
+        members: new Map([[user.usernameLower, {
+          username: user.username,
+          usernameLower: user.usernameLower,
+          joinedAt: now
+        }]]),
+        playback: {
+          seq: 1,
+          imdbId: '',
+          mediaItem: null,
+          season: 1,
+          episode: 1,
+          voice: '',
+          balancer: 'direct',
+          paused: true,
+          currentTime: 0,
+          updatedAt: now,
+          actionLabel: 'Ожидание выбора фильма'
+        },
+        messages: [{
+          id: crypto.randomBytes(6).toString('hex'),
+          type: 'system',
+          username: 'Система',
+          text: `${user.username} создал лобби «${lobbyName}» (код: ${lobbyId})`,
+          ts: now
+        }]
+      };
+      lobbies.set(lobbyId, lobby);
+      const entry = getOrCreateOnlineEntry(user);
+      entry.lobbyId = lobbyId;
+      schedulePresenceBroadcast();
+      return sendJson(res, 201, { lobby: serializeLobbyForUser(lobby, user.usernameLower) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Не удалось создать лобби' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/join' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Войдите в аккаунт, чтобы зайти в лобби' }, req);
+    try {
+      const body = await readJsonBody(req);
+      touchUserPresence(user);
+      const code = String(body.lobbyId || '').trim().toUpperCase();
+      const targetLobby = lobbies.get(code);
+      if (!targetLobby) {
+        return sendJson(res, 404, { error: 'Лобби не найдено или уже закрыто' }, req);
+      }
+      if (!targetLobby.members.has(user.usernameLower) && targetLobby.members.size >= MAX_LOBBY_PARTICIPANTS) {
+        return sendJson(res, 400, { error: `В лобби уже максимум ${MAX_LOBBY_PARTICIPANTS} человек` }, req);
+      }
+
+      const oldLobby = getUserLobby(user.usernameLower);
+      if (oldLobby && oldLobby.id !== targetLobby.id) {
+        if (oldLobby.hostLower === user.usernameLower) {
+          closeLobbyRoom(oldLobby, 'Главный перешёл в другое лобби');
+        } else {
+          removeMemberFromLobby(oldLobby, user.usernameLower, 'вышел из лобби');
+        }
+      }
+
+      const invMap = pendingInvitesByUser.get(user.usernameLower);
+      if (invMap && invMap.delete(targetLobby.id)) {
+        if (invMap.size === 0) pendingInvitesByUser.delete(user.usernameLower);
+        sendSseToUser(user.usernameLower, 'invites_update', { invites: getPendingInvitesForUser(user.usernameLower) });
+      }
+
+      const isNewJoin = !targetLobby.members.has(user.usernameLower);
+      if (isNewJoin) {
+        targetLobby.members.set(user.usernameLower, {
+          username: user.username,
+          usernameLower: user.usernameLower,
+          joinedAt: Date.now()
+        });
+      }
+      const entry = getOrCreateOnlineEntry(user);
+      entry.lobbyId = targetLobby.id;
+
+      if (isNewJoin) {
+        appendLobbyMessage(targetLobby, {
+          id: crypto.randomBytes(6).toString('hex'),
+          type: 'system',
+          username: 'Система',
+          text: `${user.username} зашёл в лобби`,
+          ts: Date.now()
+        });
+      }
+
+      broadcastToLobby(targetLobby, 'lobby_update', viewerLower => ({
+        lobby: serializeLobbyForUser(targetLobby, viewerLower)
+      }));
+      schedulePresenceBroadcast();
+
+      return sendJson(res, 200, {
+        lobby: serializeLobbyForUser(targetLobby, user.usernameLower),
+        invites: getPendingInvitesForUser(user.usernameLower)
+      }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Не удалось войти в лобби' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/leave' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const lobby = getUserLobby(user.usernameLower);
+    if (lobby) {
+      removeMemberFromLobby(lobby, user.usernameLower, 'вышел из лобби');
+    }
+    return sendJson(res, 200, { ok: true }, req);
+  }
+
+  if (pathname === '/api/lobby/close' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const lobby = getUserLobby(user.usernameLower);
+    if (!lobby) return sendJson(res, 404, { error: 'Вы не в лобби' }, req);
+    if (lobby.hostLower !== user.usernameLower) {
+      return sendJson(res, 403, { error: 'Только главный может закрыть лобби' }, req);
+    }
+    closeLobbyRoom(lobby, `Главный (${user.username}) закрыл лобби`);
+    return sendJson(res, 200, { ok: true }, req);
+  }
+
+  if (pathname === '/api/lobby/invite' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      touchUserPresence(user);
+      const lobby = getUserLobby(user.usernameLower);
+      if (!lobby) return sendJson(res, 400, { error: 'Сначала создайте или войдите в лобби' }, req);
+      if (lobby.members.size >= MAX_LOBBY_PARTICIPANTS) {
+        return sendJson(res, 400, { error: `Лобби заполнено (максимум ${MAX_LOBBY_PARTICIPANTS} человек)` }, req);
+      }
+
+      const targetRaw = String(body.targetUsername || '').trim();
+      const targetLower = targetRaw.toLowerCase();
+      if (!targetLower || targetLower === user.usernameLower) {
+        return sendJson(res, 400, { error: 'Нельзя пригласить самого себя' }, req);
+      }
+      if (lobby.members.has(targetLower)) {
+        return sendJson(res, 400, { error: 'Этот пользователь уже в лобби' }, req);
+      }
+
+      const targetRecord = await findUserByKey(targetLower);
+      const targetOnline = onlineUsers.get(targetLower);
+      if (!targetRecord && !targetOnline) {
+        return sendJson(res, 404, { error: 'Пользователь с таким ником не найден на сервере' }, req);
+      }
+
+      let invMap = pendingInvitesByUser.get(targetLower);
+      if (!invMap) {
+        invMap = new Map();
+        pendingInvitesByUser.set(targetLower, invMap);
+      }
+      const invObj = {
+        lobbyId: lobby.id,
+        lobbyName: lobby.name,
+        fromUsername: user.username,
+        createdAt: Date.now()
+      };
+      invMap.set(lobby.id, invObj);
+
+      sendSseToUser(targetLower, 'invite', {
+        invite: {
+          ...invObj,
+          memberCount: lobby.members.size,
+          maxParticipants: MAX_LOBBY_PARTICIPANTS
+        },
+        invites: getPendingInvitesForUser(targetLower)
+      });
+
+      const targetDisplay = targetOnline?.username || targetRecord?.username || targetRaw;
+      return sendJson(res, 200, { ok: true, invitedUsername: targetDisplay }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка отправки приглашения' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/decline' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      const code = String(body.lobbyId || '').trim().toUpperCase();
+      const invMap = pendingInvitesByUser.get(user.usernameLower);
+      if (invMap) {
+        invMap.delete(code);
+        if (invMap.size === 0) pendingInvitesByUser.delete(user.usernameLower);
+      }
+      return sendJson(res, 200, { ok: true, invites: getPendingInvitesForUser(user.usernameLower) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка отклонения' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/kick' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      const lobby = getUserLobby(user.usernameLower);
+      if (!lobby) return sendJson(res, 404, { error: 'Лобби не найдено' }, req);
+      if (lobby.hostLower !== user.usernameLower) {
+        return sendJson(res, 403, { error: 'Управлять участниками может только главный' }, req);
+      }
+      const targetLower = String(body.targetUsername || '').trim().toLowerCase();
+      if (!targetLower || targetLower === user.usernameLower || !lobby.members.has(targetLower)) {
+        return sendJson(res, 400, { error: 'Участник не найден в лобби' }, req);
+      }
+      sendSseToUser(targetLower, 'lobby_kicked', {
+        lobbyId: lobby.id,
+        reason: `Главный (${user.username}) исключил вас из лобби`
+      });
+      removeMemberFromLobby(lobby, targetLower, 'исключён главным');
+      return sendJson(res, 200, { lobby: serializeLobbyForUser(lobby, user.usernameLower) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка управления лобби' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/transfer-host' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      const lobby = getUserLobby(user.usernameLower);
+      if (!lobby) return sendJson(res, 404, { error: 'Лобби не найдено' }, req);
+      if (lobby.hostLower !== user.usernameLower) {
+        return sendJson(res, 403, { error: 'Передать права может только главный' }, req);
+      }
+      const targetLower = String(body.targetUsername || '').trim().toLowerCase();
+      const targetMember = lobby.members.get(targetLower);
+      if (!targetMember || targetLower === user.usernameLower) {
+        return sendJson(res, 400, { error: 'Выберите другого участника лобби' }, req);
+      }
+      lobby.hostLower = targetMember.usernameLower;
+      lobby.hostUsername = targetMember.username;
+      appendLobbyMessage(lobby, {
+        id: crypto.randomBytes(6).toString('hex'),
+        type: 'system',
+        username: 'Система',
+        text: `${user.username} передал права главного участнику ${targetMember.username}`,
+        ts: Date.now()
+      });
+      broadcastToLobby(lobby, 'lobby_update', viewerLower => ({
+        lobby: serializeLobbyForUser(lobby, viewerLower)
+      }));
+      return sendJson(res, 200, { lobby: serializeLobbyForUser(lobby, user.usernameLower) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка передачи прав' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/sync' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      touchUserPresence(user);
+      const lobby = getUserLobby(user.usernameLower);
+      if (!lobby) return sendJson(res, 404, { error: 'Лобби не найдено' }, req);
+      if (lobby.hostLower !== user.usernameLower) {
+        return sendJson(res, 403, { error: 'Управлять фильмом может только главный лобби' }, req);
+      }
+
+      const prev = lobby.playback || {};
+      const nextMedia = body.mediaItem ? sanitizeLobbyMediaItem(body.mediaItem) : prev.mediaItem;
+      const now = Date.now();
+      lobby.playback = {
+        seq: (prev.seq || 0) + 1,
+        imdbId: nextMedia?.imdbId || prev.imdbId || '',
+        mediaItem: nextMedia || null,
+        season: Math.max(1, Number(body.season ?? prev.season) || 1),
+        episode: Math.max(1, Number(body.episode ?? prev.episode) || 1),
+        voice: String(body.voice ?? prev.voice ?? '').slice(0, 80),
+        balancer: String(body.balancer ?? prev.balancer ?? 'direct').slice(0, 32),
+        paused: typeof body.paused === 'boolean' ? body.paused : Boolean(prev.paused),
+        currentTime: Math.max(0, Number(body.currentTime ?? prev.currentTime) || 0),
+        updatedAt: now,
+        actionLabel: String(body.actionLabel || '').slice(0, 80)
+      };
+
+      broadcastToLobby(
+        lobby,
+        'playback_sync',
+        { playback: lobby.playback, hostUsername: lobby.hostUsername, serverNow: now },
+        user.usernameLower
+      );
+      return sendJson(res, 200, { ok: true, playback: lobby.playback, serverNow: now }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка синхронизации лобби' }, req);
+    }
+  }
+
+  if (pathname === '/api/lobby/chat' && req.method === 'POST') {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    try {
+      const body = await readJsonBody(req);
+      touchUserPresence(user);
+      const lobby = getUserLobby(user.usernameLower);
+      if (!lobby) return sendJson(res, 404, { error: 'Вы не состоите в лобби' }, req);
+      const text = String(body.text || '').trim().slice(0, 400);
+      if (!text) return sendJson(res, 400, { error: 'Введите сообщение' }, req);
+
+      const msg = {
+        id: crypto.randomBytes(6).toString('hex'),
+        type: 'user',
+        username: user.username,
+        text,
+        ts: Date.now()
+      };
+      appendLobbyMessage(lobby, msg);
+      return sendJson(res, 200, { ok: true, message: msg }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка отправки сообщения' }, req);
     }
   }
 

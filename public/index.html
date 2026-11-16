@@ -20,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=15" />
+  <link rel="stylesheet" href="/styles.css?v=16" />
 </head>
 <body>
   <!-- Top Header -->
@@ -85,6 +85,17 @@
       <button id="parsersStatusBtn" class="status-pill focusable" type="button" title="Источники видеопотоков">
         <span class="status-dot"></span>
         <span>Прямой поток • Без рекламы</span>
+      </button>
+      <button id="lobbyBtn" class="lobby-pill focusable" type="button" title="Лобби — совместный просмотр (до 20 чел.)" aria-label="Лобби">
+        <span id="lobbyOnlineDot" class="lobby-dot hidden"></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+          <circle cx="9" cy="7" r="4"></circle>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </svg>
+        <span id="lobbyBtnLabel">Лобби</span>
+        <span id="lobbyBtnBadge" class="lobby-count-badge hidden">0</span>
       </button>
       <button id="accountBtn" class="account-pill focusable" type="button" title="Аккаунт и синхронизация устройств" aria-label="Аккаунт">
         <span id="accountDot" class="account-dot hidden"></span>
@@ -394,6 +405,26 @@
             <div id="directPlayerWrap" class="direct-player-wrap">
               <div id="videoStageArea" class="video-stage-area controls-active">
                 <div id="playerOsd" class="player-osd hidden"></div>
+                <button id="lobbyPlayerPill" class="lobby-player-pill hidden" type="button" title="Открыть панель лобби">
+                  <span class="lobby-dot-live"></span>
+                  <span id="lobbyPlayerPillText">Лобби</span>
+                </button>
+                <button id="lobbyAutoplayResumeBtn" class="lobby-autoplay-btn hidden" type="button">
+                  ▶ Нажмите, чтобы синхронизироваться с главным
+                </button>
+
+                <!-- Optional Collapsible In-Player Lobby Chat Drawer (works in Windowed & Fullscreen) -->
+                <div id="playerChatDrawer" class="player-chat-drawer hidden" aria-label="Чат лобби">
+                  <div class="player-chat-head">
+                    <span id="playerChatTitle">Чат лобби</span>
+                    <button id="closePlayerChatBtn" class="modal-close-btn chat-close-btn" type="button" aria-label="Закрыть чат">×</button>
+                  </div>
+                  <div id="playerChatMessages" class="lobby-chat-messages"></div>
+                  <form id="playerChatForm" class="lobby-chat-form">
+                    <input id="playerChatInput" type="text" maxlength="400" placeholder="Написать в чат..." autocomplete="off" />
+                    <button class="btn-primary btn-xs" type="submit">→</button>
+                  </form>
+                </div>
 
                 <video
                   id="html5Video"
@@ -496,6 +527,13 @@
                       <span id="videoTimeText" class="video-time-text">0:00 / 0:00</span>
                     </div>
                     <div class="video-controls-right">
+                      <button id="vcLobbyChatBtn" class="vc-btn vc-btn-chat focusable hidden" type="button" title="Чат лобби" aria-label="Чат лобби">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        <span class="vc-btn-text-chat">Чат</span>
+                        <span id="vcLobbyChatBadge" class="chat-unread-pill hidden">0</span>
+                      </button>
                       <button id="vcFullscreenBtn" class="vc-btn vc-btn-fs focusable" type="button" title="Полноэкранный режим">
                         <svg id="vcFsEnterIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                           <polyline points="15 3 21 3 21 9"></polyline>
@@ -845,6 +883,147 @@
     </div>
   </div>
 
-  <script src="/app.js?v=17"></script>
+  <!-- Watch Party / Lobby Modal -->
+  <div id="lobbyModal" class="modal-overlay hidden">
+    <div class="modal-window modal-md">
+      <div class="modal-header">
+        <div>
+          <h2>Лобби и совместный просмотр</h2>
+          <span id="lobbyServerStatusText" class="lobby-subline">До 20 человек • Главный управляет фильмом</span>
+        </div>
+        <button id="closeLobbyModalBtn" class="modal-close-btn focusable" type="button" aria-label="Закрыть">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- Guest Auth Required View -->
+        <div id="lobbyAuthRequiredView" class="lobby-section">
+          <p class="auth-hint">
+            Чтобы создать лобби, видеть кто сейчас на сервере и приглашать друзей — войдите в свой профиль по нику и паролю (или зарегистрируйтесь без почты за 5 секунд).
+          </p>
+          <button id="lobbyLoginRedirectBtn" class="btn-primary full-width focusable" type="button">Войти или создать аккаунт</button>
+        </div>
+
+        <!-- Logged-In Hub (Create / Join / Invites) -->
+        <div id="lobbyHubView" class="lobby-section hidden">
+          <div id="lobbyInvitesBox" class="lobby-invites-box hidden">
+            <div class="lobby-block-title">Приглашения в лобби</div>
+            <div id="lobbyInvitesList" class="lobby-invites-list"></div>
+          </div>
+
+          <div class="lobby-hub-grid">
+            <form id="lobbyCreateForm" class="lobby-card">
+              <div class="lobby-card-title">Создать своё лобби</div>
+              <p class="lobby-card-desc">Вы станете главным: выбираете фильм, ставите паузу, перематываете — всё повторяется у всех (до 20 чел.).</p>
+              <input id="lobbyNameInput" class="focusable" type="text" maxlength="40" placeholder="Название комнаты (напр. Кино с котом)" />
+              <button id="lobbyCreateBtn" class="btn-primary full-width focusable" type="submit">Создать лобби</button>
+            </form>
+
+            <form id="lobbyJoinCodeForm" class="lobby-card">
+              <div class="lobby-card-title">Войти по коду лобби</div>
+              <p class="lobby-card-desc">Если друг продиктовал 6-значный код комнаты, введите его здесь или примите приглашение.</p>
+              <input id="lobbyJoinCodeInput" class="focusable mono" type="text" maxlength="10" placeholder="Например: K9M4P2" style="text-transform: uppercase;" required />
+              <button id="lobbyJoinCodeBtn" class="btn-ghost full-width focusable" type="submit">Войти по коду</button>
+            </form>
+          </div>
+
+          <div class="lobby-card" style="margin-top: 12px;">
+            <div class="lobby-card-head">
+              <span class="lobby-card-title">Сейчас на сервере (<span id="lobbyHubOnlineCount">0</span>)</span>
+              <button id="lobbyHubRefreshOnlineBtn" class="btn-ghost btn-xs focusable" type="button">Обновить</button>
+            </div>
+            <div id="lobbyHubOnlineList" class="lobby-user-pills"></div>
+          </div>
+        </div>
+
+        <!-- Active Lobby View -->
+        <div id="lobbyRoomView" class="lobby-section hidden">
+          <div class="lobby-room-hero">
+            <div class="lobby-room-meta">
+              <div class="lobby-room-title-row">
+                <h3 id="lobbyRoomNameTitle">Лобби</h3>
+                <button id="lobbyRoomCodeBadge" class="lobby-code-chip focusable" type="button" title="Нажмите, чтобы скопировать код">КОД</button>
+              </div>
+              <div class="lobby-room-sub">
+                <span id="lobbyRoomHostLabel">Главный: —</span>
+                <span>•</span>
+                <span id="lobbyRoomCapacityLabel">1 / 20 участников</span>
+              </div>
+            </div>
+            <div class="lobby-room-actions">
+              <button id="lobbyBrowseFilmsBtn" class="btn-primary btn-sm focusable" type="button">Выбрать фильм</button>
+              <button id="lobbyOpenPlaybackBtn" class="btn-ghost btn-sm focusable hidden" type="button">Открыть плеер</button>
+              <button id="lobbyLeaveBtn" class="btn-ghost btn-sm focusable" type="button">Выйти</button>
+              <button id="lobbyCloseRoomBtn" class="btn-danger-ghost btn-sm focusable hidden" type="button">Закрыть лобби</button>
+            </div>
+          </div>
+
+          <div id="lobbyNowWatchingCard" class="lobby-now-card hidden">
+            <div>
+              <span class="lobby-now-kicker">Сейчас в лобби</span>
+              <strong id="lobbyNowTitle">—</strong>
+              <span id="lobbyNowState" class="lobby-now-sub">—</span>
+            </div>
+            <button id="lobbySyncJumpBtn" class="btn-primary btn-xs focusable" type="button">Смотреть</button>
+          </div>
+
+          <div class="segmented-tabs lobby-mode-tabs">
+            <button id="lobbyTabMembersBtn" class="hdvb-tab active focusable" type="button">Участники и поиск</button>
+            <button id="lobbyTabChatBtn" class="hdvb-tab focusable" type="button">
+              <span>Чат</span>
+              <span id="lobbyModalChatBadge" class="chat-unread-pill hidden">0</span>
+            </button>
+          </div>
+
+          <!-- Tab 1: Search Users on Server & Manage Participants -->
+          <div id="lobbyMembersPane">
+            <div class="lobby-card" style="margin-bottom: 12px;">
+              <div class="lobby-card-head">
+                <span class="lobby-card-title">Пригласить с сервера (<span id="lobbyServerOnlineCount">0</span> онлайн)</span>
+                <button id="lobbySearchRefreshBtn" class="btn-ghost btn-xs focusable" type="button">Обновить</button>
+              </div>
+              <div class="lobby-search-row">
+                <input id="lobbyUserSearchInput" class="focusable" type="search" maxlength="32" placeholder="Поиск игрока по нику..." autocomplete="off" />
+              </div>
+              <div id="lobbyUserSearchList" class="lobby-users-list"></div>
+            </div>
+
+            <div class="lobby-card">
+              <div class="lobby-card-title" style="margin-bottom: 8px;">Участники в лобби (<span id="lobbyMembersCountText">0 / 20</span>)</div>
+              <div id="lobbyMembersList" class="lobby-users-list"></div>
+            </div>
+          </div>
+
+          <!-- Tab 2: Optional Lobby Chat -->
+          <div id="lobbyChatPane" class="hidden">
+            <div class="lobby-modal-chat-wrap">
+              <div id="lobbyModalChatMessages" class="lobby-chat-messages"></div>
+              <form id="lobbyModalChatForm" class="lobby-chat-form">
+                <input id="lobbyModalChatInput" class="focusable" type="text" maxlength="400" placeholder="Написать сообщение в лобби..." autocomplete="off" />
+                <button class="btn-primary btn-sm focusable" type="submit">Отправить</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Real-Time Incoming Lobby Invite Toast -->
+  <div id="lobbyInviteToast" class="lobby-invite-toast hidden" role="alert">
+    <div class="invite-toast-text">
+      <strong id="inviteToastTitle">Приглашение в лобби</strong>
+      <span id="inviteToastSub">—</span>
+    </div>
+    <div class="invite-toast-actions">
+      <button id="inviteToastAcceptBtn" class="btn-primary btn-xs focusable" type="button">Войти</button>
+      <button id="inviteToastDeclineBtn" class="btn-ghost btn-xs focusable" type="button">Отклонить</button>
+    </div>
+  </div>
+
+  <script src="/app.js?v=18"></script>
 </body>
 </html>

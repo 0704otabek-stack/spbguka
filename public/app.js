@@ -552,6 +552,73 @@ const pwaInstallActionBtn = document.getElementById('pwaInstallActionBtn');
 const pwaInstallHint = document.getElementById('pwaInstallHint');
 const pwaRefreshAppBtn = document.getElementById('pwaRefreshAppBtn');
 
+// Watch Party / Lobby Elements
+const lobbyBtn = document.getElementById('lobbyBtn');
+const lobbyOnlineDot = document.getElementById('lobbyOnlineDot');
+const lobbyBtnBadge = document.getElementById('lobbyBtnBadge');
+const lobbyModal = document.getElementById('lobbyModal');
+const closeLobbyModalBtn = document.getElementById('closeLobbyModalBtn');
+const lobbyServerStatusText = document.getElementById('lobbyServerStatusText');
+const lobbyAuthRequiredView = document.getElementById('lobbyAuthRequiredView');
+const lobbyLoginRedirectBtn = document.getElementById('lobbyLoginRedirectBtn');
+const lobbyHubView = document.getElementById('lobbyHubView');
+const lobbyInvitesBox = document.getElementById('lobbyInvitesBox');
+const lobbyInvitesList = document.getElementById('lobbyInvitesList');
+const lobbyCreateForm = document.getElementById('lobbyCreateForm');
+const lobbyNameInput = document.getElementById('lobbyNameInput');
+const lobbyJoinCodeForm = document.getElementById('lobbyJoinCodeForm');
+const lobbyJoinCodeInput = document.getElementById('lobbyJoinCodeInput');
+const lobbyHubOnlineCount = document.getElementById('lobbyHubOnlineCount');
+const lobbyHubRefreshOnlineBtn = document.getElementById('lobbyHubRefreshOnlineBtn');
+const lobbyHubOnlineList = document.getElementById('lobbyHubOnlineList');
+const lobbyRoomView = document.getElementById('lobbyRoomView');
+const lobbyRoomNameTitle = document.getElementById('lobbyRoomNameTitle');
+const lobbyRoomCodeBadge = document.getElementById('lobbyRoomCodeBadge');
+const lobbyRoomHostLabel = document.getElementById('lobbyRoomHostLabel');
+const lobbyRoomCapacityLabel = document.getElementById('lobbyRoomCapacityLabel');
+const lobbyBrowseFilmsBtn = document.getElementById('lobbyBrowseFilmsBtn');
+const lobbyOpenPlaybackBtn = document.getElementById('lobbyOpenPlaybackBtn');
+const lobbyLeaveBtn = document.getElementById('lobbyLeaveBtn');
+const lobbyCloseRoomBtn = document.getElementById('lobbyCloseRoomBtn');
+const lobbyNowWatchingCard = document.getElementById('lobbyNowWatchingCard');
+const lobbyNowTitle = document.getElementById('lobbyNowTitle');
+const lobbyNowState = document.getElementById('lobbyNowState');
+const lobbySyncJumpBtn = document.getElementById('lobbySyncJumpBtn');
+const lobbyTabMembersBtn = document.getElementById('lobbyTabMembersBtn');
+const lobbyTabChatBtn = document.getElementById('lobbyTabChatBtn');
+const lobbyModalChatBadge = document.getElementById('lobbyModalChatBadge');
+const lobbyMembersPane = document.getElementById('lobbyMembersPane');
+const lobbyChatPane = document.getElementById('lobbyChatPane');
+const lobbyServerOnlineCount = document.getElementById('lobbyServerOnlineCount');
+const lobbySearchRefreshBtn = document.getElementById('lobbySearchRefreshBtn');
+const lobbyUserSearchInput = document.getElementById('lobbyUserSearchInput');
+const lobbyUserSearchList = document.getElementById('lobbyUserSearchList');
+const lobbyMembersCountText = document.getElementById('lobbyMembersCountText');
+const lobbyMembersList = document.getElementById('lobbyMembersList');
+const lobbyModalChatMessages = document.getElementById('lobbyModalChatMessages');
+const lobbyModalChatForm = document.getElementById('lobbyModalChatForm');
+const lobbyModalChatInput = document.getElementById('lobbyModalChatInput');
+
+// In-Player Lobby HUD & Optional Chat Drawer
+const vcLobbyChatBtn = document.getElementById('vcLobbyChatBtn');
+const vcLobbyChatBadge = document.getElementById('vcLobbyChatBadge');
+const lobbyPlayerPill = document.getElementById('lobbyPlayerPill');
+const lobbyPlayerPillText = document.getElementById('lobbyPlayerPillText');
+const lobbyAutoplayResumeBtn = document.getElementById('lobbyAutoplayResumeBtn');
+const playerChatDrawer = document.getElementById('playerChatDrawer');
+const playerChatTitle = document.getElementById('playerChatTitle');
+const closePlayerChatBtn = document.getElementById('closePlayerChatBtn');
+const playerChatMessages = document.getElementById('playerChatMessages');
+const playerChatForm = document.getElementById('playerChatForm');
+const playerChatInput = document.getElementById('playerChatInput');
+
+// Floating Invite Toast
+const lobbyInviteToast = document.getElementById('lobbyInviteToast');
+const inviteToastTitle = document.getElementById('inviteToastTitle');
+const inviteToastSub = document.getElementById('inviteToastSub');
+const inviteToastAcceptBtn = document.getElementById('inviteToastAcceptBtn');
+const inviteToastDeclineBtn = document.getElementById('inviteToastDeclineBtn');
+
 // Account & Sync Elements
 const accountBtn = document.getElementById('accountBtn');
 const accountDot = document.getElementById('accountDot');
@@ -765,6 +832,7 @@ function setAuthSession(token, username) {
   if (authUser) localStorage.setItem('spbguka_auth_user', authUser);
   else localStorage.removeItem('spbguka_auth_user');
   updateAccountUI();
+  if (typeof syncLobbyAuthSession === 'function') syncLobbyAuthSession();
 }
 
 function updateAccountUI() {
@@ -881,6 +949,784 @@ async function pullAccountSync(force = false) {
     }
   } catch (e) {}
   return false;
+}
+
+// --- Watch Party / Lobby System (Max 20 Participants, Host Playback Sync, Optional Chat) ---
+const lobbyState = {
+  lobby: null,
+  invites: [],
+  onlineTotal: 0,
+  users: [],
+  activeModalTab: 'members', // 'members' | 'chat'
+  chatOpenInPlayer: false,
+  unreadMessages: 0,
+  lastSeqApplied: 0,
+  serverClockOffsetMs: 0,
+  sse: null,
+  searchTimer: null,
+  hostSyncTimer: null,
+  hostHeartbeatTimer: null,
+  pendingSyncPlayback: null,
+  pendingAutoplayBlocked: false
+};
+
+let isApplyingLobbySync = false;
+
+function isLobbyHost() {
+  return Boolean(lobbyState.lobby && authUser && lobbyState.lobby.isHost);
+}
+
+function isLobbyGuest() {
+  return Boolean(lobbyState.lobby && authUser && !lobbyState.lobby.isHost);
+}
+
+function guardLobbyGuestPlaybackControl() {
+  if (!isLobbyGuest()) return false;
+  showPlayerOsd(`Управляет главный: ${lobbyState.lobby?.hostUsername || 'хост'}`);
+  return true;
+}
+
+function computeLobbyTargetTime(playback) {
+  if (!playback) return 0;
+  const base = Math.max(0, Number(playback.currentTime) || 0);
+  if (playback.paused) return base;
+  const estServerNow = Date.now() + lobbyState.serverClockOffsetMs;
+  const elapsed = Math.max(0, (estServerNow - (Number(playback.updatedAt) || estServerNow)) / 1000);
+  return base + elapsed;
+}
+
+async function lobbyApi(url, method = 'GET', body = null) {
+  if (!authToken) throw new Error('Войдите в аккаунт');
+  const opts = {
+    method,
+    headers: { 'Authorization': `Bearer ${authToken}` }
+  };
+  if (body !== null) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    setAuthSession('', '');
+  }
+  if (!res.ok) {
+    throw new Error(data.error || 'Ошибка запроса лобби');
+  }
+  return data;
+}
+
+function normalizeLobbyPayload(lobby) {
+  if (!lobby) return null;
+  const meLower = (authUser || '').toLowerCase();
+  return {
+    ...lobby,
+    isHost: Boolean(meLower && lobby.hostUsername && lobby.hostUsername.toLowerCase() === meLower),
+    messages: Array.isArray(lobby.messages) ? lobby.messages : [],
+    members: Array.isArray(lobby.members) ? lobby.members : []
+  };
+}
+
+function setCurrentLobby(rawLobby, skipPlaybackSync = false) {
+  const prevLobbyId = lobbyState.lobby?.id || '';
+  lobbyState.lobby = normalizeLobbyPayload(rawLobby);
+  if (lobbyState.lobby && lobbyState.lobby.serverNow) {
+    lobbyState.serverClockOffsetMs = lobbyState.lobby.serverNow - Date.now();
+  }
+  if (!lobbyState.lobby) {
+    lobbyState.chatOpenInPlayer = false;
+    lobbyState.unreadMessages = 0;
+    lobbyState.lastSeqApplied = 0;
+    lobbyState.pendingSyncPlayback = null;
+    lobbyState.pendingAutoplayBlocked = false;
+    stopHostSyncHeartbeat();
+  } else if (prevLobbyId !== lobbyState.lobby.id) {
+    lobbyState.unreadMessages = 0;
+    lobbyState.lastSeqApplied = 0;
+  }
+
+  updateLobbyUi();
+
+  if (lobbyState.lobby && lobbyState.lobby.isHost) {
+    startHostSyncHeartbeat();
+  } else {
+    stopHostSyncHeartbeat();
+  }
+
+  if (!skipPlaybackSync && lobbyState.lobby && !lobbyState.lobby.isHost && lobbyState.lobby.playback?.mediaItem) {
+    applyIncomingLobbyPlayback(lobbyState.lobby.playback, lobbyState.lobby.hostUsername, lobbyState.lobby.serverNow);
+  }
+}
+
+function renderLobbyUserRow(u, mode) {
+  const row = document.createElement('div');
+  row.className = 'lobby-user-row';
+
+  const meta = document.createElement('div');
+  meta.className = 'lobby-user-meta';
+  const dot = document.createElement('span');
+  dot.className = `lobby-status-dot ${u.online ? 'is-online' : ''}`;
+  const name = document.createElement('span');
+  name.className = 'lobby-user-name';
+  name.textContent = u.username;
+  meta.append(dot, name);
+
+  if (mode === 'member' && u.isHost) {
+    const tag = document.createElement('span');
+    tag.className = 'lobby-role-tag';
+    tag.textContent = 'Главный';
+    meta.appendChild(tag);
+  } else {
+    const st = document.createElement('span');
+    st.className = `lobby-status-text ${u.online ? 'is-online' : ''}`;
+    st.textContent = u.online ? 'Онлайн' : 'Офлайн';
+    meta.appendChild(st);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'lobby-user-actions';
+
+  if (mode === 'search') {
+    if (u.inThisLobby) {
+      const lbl = document.createElement('span');
+      lbl.className = 'lobby-status-text is-online';
+      lbl.textContent = 'В лобби';
+      actions.appendChild(lbl);
+    } else if (u.invited) {
+      const lbl = document.createElement('span');
+      lbl.className = 'lobby-status-text';
+      lbl.textContent = 'Приглашён';
+      actions.appendChild(lbl);
+    } else {
+      const invBtn = document.createElement('button');
+      invBtn.className = 'btn-primary btn-xs focusable';
+      invBtn.type = 'button';
+      invBtn.textContent = 'Пригласить';
+      invBtn.addEventListener('click', () => inviteUserToLobby(u.username, invBtn));
+      actions.appendChild(invBtn);
+    }
+  } else if (mode === 'member' && isLobbyHost() && !u.isHost) {
+    const passBtn = document.createElement('button');
+    passBtn.className = 'btn-ghost btn-xs focusable';
+    passBtn.type = 'button';
+    passBtn.title = 'Передать права главного';
+    passBtn.textContent = 'Сделать главным';
+    passBtn.addEventListener('click', () => transferLobbyHost(u.username));
+
+    const kickBtn = document.createElement('button');
+    kickBtn.className = 'btn-danger-ghost btn-xs focusable';
+    kickBtn.type = 'button';
+    kickBtn.title = 'Исключить из лобби';
+    kickBtn.textContent = 'Исключить';
+    kickBtn.addEventListener('click', () => kickLobbyMember(u.username));
+    actions.append(passBtn, kickBtn);
+  }
+
+  row.append(meta, actions);
+  return row;
+}
+
+function renderChatListInto(container, messages) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!messages || messages.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'lobby-chat-msg is-system';
+    empty.textContent = 'Пока нет сообщений. Напишите первым!';
+    container.appendChild(empty);
+    return;
+  }
+  const meLower = (authUser || '').toLowerCase();
+  for (const m of messages) {
+    const el = document.createElement('div');
+    const isSelf = m.type !== 'system' && m.username && m.username.toLowerCase() === meLower;
+    el.className = `lobby-chat-msg ${m.type === 'system' ? 'is-system' : ''} ${isSelf ? 'is-self' : ''}`;
+    if (m.type === 'system') {
+      el.textContent = m.text;
+    } else {
+      const authorSpan = document.createElement('span');
+      authorSpan.className = 'chat-author';
+      authorSpan.textContent = m.username || 'Гость';
+      const textSpan = document.createElement('span');
+      textSpan.textContent = m.text || '';
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'chat-time';
+      timeSpan.textContent = new Date(m.ts || Date.now()).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      el.append(authorSpan, textSpan, timeSpan);
+    }
+    container.appendChild(el);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderLobbyInvites() {
+  const invites = lobbyState.invites || [];
+  if (lobbyInvitesBox) lobbyInvitesBox.classList.toggle('hidden', invites.length === 0);
+  if (lobbyInvitesList) {
+    lobbyInvitesList.innerHTML = '';
+    for (const inv of invites) {
+      const row = document.createElement('div');
+      row.className = 'lobby-invite-row';
+      const info = document.createElement('div');
+      info.className = 'lobby-user-meta';
+      const txt = document.createElement('span');
+      txt.className = 'lobby-user-name';
+      txt.textContent = `«${inv.lobbyName}» от ${inv.fromUsername} (${inv.memberCount}/${inv.maxParticipants})`;
+      info.appendChild(txt);
+
+      const acts = document.createElement('div');
+      acts.className = 'lobby-user-actions';
+      const acc = document.createElement('button');
+      acc.className = 'btn-primary btn-xs focusable';
+      acc.type = 'button';
+      acc.textContent = 'Войти';
+      acc.addEventListener('click', () => joinLobbyById(inv.lobbyId));
+      const dec = document.createElement('button');
+      dec.className = 'btn-ghost btn-xs focusable';
+      dec.type = 'button';
+      dec.textContent = 'Отклонить';
+      dec.addEventListener('click', () => declineLobbyInvite(inv.lobbyId));
+      acts.append(acc, dec);
+
+      row.append(info, acts);
+      lobbyInvitesList.appendChild(row);
+    }
+  }
+
+  if (lobbyInviteToast) {
+    const latest = invites[0];
+    if (!latest || (lobbyState.lobby && lobbyState.lobby.id === latest.lobbyId)) {
+      lobbyInviteToast.classList.add('hidden');
+    } else {
+      if (inviteToastTitle) inviteToastTitle.textContent = `Приглашение в лобби «${latest.lobbyName}»`;
+      if (inviteToastSub) inviteToastSub.textContent = `От ${latest.fromUsername} • ${latest.memberCount}/${latest.maxParticipants} чел.`;
+      lobbyInviteToast.dataset.lobbyId = latest.lobbyId;
+      lobbyInviteToast.classList.remove('hidden');
+    }
+  }
+}
+
+function renderLobbyUsersSearchList() {
+  const onlineCountText = String(lobbyState.onlineTotal || 0);
+  if (lobbyHubOnlineCount) lobbyHubOnlineCount.textContent = onlineCountText;
+  if (lobbyServerOnlineCount) lobbyServerOnlineCount.textContent = onlineCountText;
+
+  if (lobbyHubOnlineList) {
+    lobbyHubOnlineList.innerHTML = '';
+    const onlineOnly = (lobbyState.users || []).filter(u => u.online);
+    if (onlineOnly.length === 0) {
+      const note = document.createElement('span');
+      note.className = 'lobby-status-text';
+      note.textContent = 'Сейчас других игроков онлайн не найдено';
+      lobbyHubOnlineList.appendChild(note);
+    } else {
+      for (const u of onlineOnly) {
+        const pill = document.createElement('span');
+        pill.className = 'lobby-online-pill';
+        const dot = document.createElement('span');
+        dot.className = 'lobby-status-dot is-online';
+        const nm = document.createElement('span');
+        nm.textContent = u.username;
+        pill.append(dot, nm);
+        lobbyHubOnlineList.appendChild(pill);
+      }
+    }
+  }
+
+  if (lobbyUserSearchList) {
+    lobbyUserSearchList.innerHTML = '';
+    if (!lobbyState.users || lobbyState.users.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'lobby-status-text';
+      empty.style.padding = '6px 2px';
+      empty.textContent = 'Никто не найден по запросу';
+      lobbyUserSearchList.appendChild(empty);
+    } else {
+      for (const u of lobbyState.users) {
+        lobbyUserSearchList.appendChild(renderLobbyUserRow(u, 'search'));
+      }
+    }
+  }
+}
+
+function updateLobbyUi() {
+  const loggedIn = Boolean(authToken && authUser);
+  const lobby = lobbyState.lobby;
+  const inviteCount = (lobbyState.invites || []).length;
+
+  if (lobbyBtn) lobbyBtn.classList.toggle('in-lobby', Boolean(lobby));
+  if (lobbyOnlineDot) lobbyOnlineDot.classList.toggle('hidden', !lobby);
+  if (lobbyBtnBadge) {
+    const badgeVal = lobby ? lobby.memberCount : inviteCount;
+    lobbyBtnBadge.textContent = String(badgeVal);
+    lobbyBtnBadge.classList.toggle('hidden', badgeVal <= 0);
+  }
+
+  if (lobbyServerStatusText) {
+    lobbyServerStatusText.textContent = loggedIn
+      ? `На сервере онлайн: ${lobbyState.onlineTotal} • До 20 человек в лобби`
+      : 'До 20 человек • Главный управляет фильмом';
+  }
+
+  if (lobbyAuthRequiredView) lobbyAuthRequiredView.classList.toggle('hidden', loggedIn);
+  if (lobbyHubView) lobbyHubView.classList.toggle('hidden', !loggedIn || Boolean(lobby));
+  if (lobbyRoomView) lobbyRoomView.classList.toggle('hidden', !loggedIn || !lobby);
+
+  // Player bar Chat button & badge (strictly optional, hidden when not in a lobby)
+  if (vcLobbyChatBtn) vcLobbyChatBtn.classList.toggle('hidden', !lobby);
+  if (vcLobbyChatBadge) {
+    vcLobbyChatBadge.textContent = String(lobbyState.unreadMessages);
+    vcLobbyChatBadge.classList.toggle('hidden', !lobby || lobbyState.unreadMessages <= 0);
+  }
+  if (lobbyModalChatBadge) {
+    lobbyModalChatBadge.textContent = String(lobbyState.unreadMessages);
+    lobbyModalChatBadge.classList.toggle('hidden', !lobby || lobbyState.unreadMessages <= 0);
+  }
+  if (playerChatDrawer) {
+    playerChatDrawer.classList.toggle('hidden', !lobby || !lobbyState.chatOpenInPlayer);
+  }
+  if (lobbyPlayerPill && lobbyPlayerPillText) {
+    lobbyPlayerPill.classList.toggle('hidden', !lobby);
+    if (lobby) {
+      lobbyPlayerPillText.textContent = lobby.isHost
+        ? `Лобби «${lobby.name}» (${lobby.memberCount}/20) • Вы главный`
+        : `Лобби «${lobby.name}» • Главный: ${lobby.hostUsername}`;
+    }
+  }
+  if (lobbyAutoplayResumeBtn) {
+    lobbyAutoplayResumeBtn.classList.toggle('hidden', !lobby || lobby.isHost || !lobbyState.pendingAutoplayBlocked);
+  }
+
+  renderLobbyInvites();
+
+  if (!lobby) return;
+
+  if (lobbyRoomNameTitle) lobbyRoomNameTitle.textContent = lobby.name;
+  if (lobbyRoomCodeBadge) lobbyRoomCodeBadge.textContent = `Код: ${lobby.id}`;
+  if (lobbyRoomHostLabel) {
+    lobbyRoomHostLabel.textContent = lobby.isHost
+      ? `Главный: ${lobby.hostUsername} (Вы)`
+      : `Главный: ${lobby.hostUsername}`;
+  }
+  if (lobbyRoomCapacityLabel) {
+    lobbyRoomCapacityLabel.textContent = `${lobby.memberCount} / ${lobby.maxParticipants} участников`;
+  }
+  if (lobbyMembersCountText) {
+    lobbyMembersCountText.textContent = `${lobby.memberCount} / ${lobby.maxParticipants}`;
+  }
+  if (lobbyBrowseFilmsBtn) lobbyBrowseFilmsBtn.classList.toggle('hidden', !lobby.isHost);
+  if (lobbyCloseRoomBtn) lobbyCloseRoomBtn.classList.toggle('hidden', !lobby.isHost);
+  if (lobbyOpenPlaybackBtn) lobbyOpenPlaybackBtn.classList.toggle('hidden', !lobby.playback?.mediaItem);
+
+  if (lobbyNowWatchingCard) {
+    const hasMedia = Boolean(lobby.playback?.mediaItem);
+    lobbyNowWatchingCard.classList.toggle('hidden', !hasMedia);
+    if (hasMedia) {
+      if (lobbyNowTitle) lobbyNowTitle.textContent = lobby.playback.mediaItem.title || 'Фильм';
+      if (lobbyNowState) {
+        const curSec = Math.floor(computeLobbyTargetTime(lobby.playback));
+        const statusStr = lobby.playback.paused ? 'На паузе' : 'Смотрят сейчас';
+        lobbyNowState.textContent = `${statusStr} • ${formatPlayerTime(curSec)}`;
+      }
+    }
+  }
+
+  if (playerChatTitle) playerChatTitle.textContent = `Чат: ${lobby.name}`;
+
+  if (lobbyMembersList) {
+    lobbyMembersList.innerHTML = '';
+    for (const m of lobby.members) {
+      lobbyMembersList.appendChild(renderLobbyUserRow(m, 'member'));
+    }
+  }
+
+  renderChatListInto(playerChatMessages, lobby.messages);
+  renderChatListInto(lobbyModalChatMessages, lobby.messages);
+}
+
+function setLobbyModalTab(tabName) {
+  lobbyState.activeModalTab = tabName === 'chat' ? 'chat' : 'members';
+  if (lobbyTabMembersBtn) lobbyTabMembersBtn.classList.toggle('active', lobbyState.activeModalTab === 'members');
+  if (lobbyTabChatBtn) lobbyTabChatBtn.classList.toggle('active', lobbyState.activeModalTab === 'chat');
+  if (lobbyMembersPane) lobbyMembersPane.classList.toggle('hidden', lobbyState.activeModalTab !== 'members');
+  if (lobbyChatPane) lobbyChatPane.classList.toggle('hidden', lobbyState.activeModalTab !== 'chat');
+  if (lobbyState.activeModalTab === 'chat') {
+    lobbyState.unreadMessages = 0;
+    updateLobbyUi();
+  }
+}
+
+async function fetchLobbyUsers(query = '') {
+  if (!authToken) return;
+  try {
+    const data = await lobbyApi(`/api/lobby/users?q=${encodeURIComponent(query)}`);
+    lobbyState.users = Array.isArray(data.users) ? data.users : [];
+    lobbyState.onlineTotal = Number(data.onlineTotal) || 0;
+    renderLobbyUsersSearchList();
+    updateLobbyUi();
+  } catch (e) {}
+}
+
+async function refreshLobbyState() {
+  if (!authToken) return;
+  try {
+    const data = await lobbyApi('/api/lobby/state');
+    lobbyState.invites = Array.isArray(data.invites) ? data.invites : [];
+    lobbyState.onlineTotal = Number(data.onlineTotal) || 0;
+    if (data.serverNow) lobbyState.serverClockOffsetMs = data.serverNow - Date.now();
+    setCurrentLobby(data.lobby || null);
+  } catch (e) {}
+}
+
+function disconnectLobbyEvents() {
+  if (lobbyState.sse) {
+    try { lobbyState.sse.close(); } catch (e) {}
+    lobbyState.sse = null;
+  }
+  stopHostSyncHeartbeat();
+}
+
+function connectLobbyEvents() {
+  disconnectLobbyEvents();
+  if (!authToken || typeof EventSource === 'undefined') return;
+  const es = new EventSource(`/api/lobby/events?token=${encodeURIComponent(authToken)}`);
+  lobbyState.sse = es;
+
+  es.addEventListener('init', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.serverNow) lobbyState.serverClockOffsetMs = data.serverNow - Date.now();
+      lobbyState.invites = Array.isArray(data.invites) ? data.invites : [];
+      lobbyState.onlineTotal = Number(data.onlineCount) || 0;
+      setCurrentLobby(data.lobby || null);
+      if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+        fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+      }
+    } catch (e) {}
+  });
+
+  es.addEventListener('presence_pulse', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      lobbyState.onlineTotal = Number(data.onlineCount) || lobbyState.onlineTotal;
+      updateLobbyUi();
+      if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+        fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+      }
+    } catch (e) {}
+  });
+
+  es.addEventListener('invite', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      lobbyState.invites = Array.isArray(data.invites) ? data.invites : lobbyState.invites;
+      updateLobbyUi();
+      if (data.invite) {
+        showPlayerOsd(`Приглашение в лобби «${data.invite.lobbyName}» от ${data.invite.fromUsername}`);
+      }
+    } catch (e) {}
+  });
+
+  es.addEventListener('invites_update', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      lobbyState.invites = Array.isArray(data.invites) ? data.invites : [];
+      updateLobbyUi();
+    } catch (e) {}
+  });
+
+  es.addEventListener('lobby_update', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      setCurrentLobby(data.lobby || null, true);
+      if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+        fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+      }
+    } catch (e) {}
+  });
+
+  es.addEventListener('playback_sync', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.serverNow) lobbyState.serverClockOffsetMs = data.serverNow - Date.now();
+      if (lobbyState.lobby && data.playback) {
+        lobbyState.lobby.playback = data.playback;
+        if (data.hostUsername) {
+          lobbyState.lobby.hostUsername = data.hostUsername;
+          lobbyState.lobby.isHost = Boolean(authUser && data.hostUsername.toLowerCase() === authUser.toLowerCase());
+        }
+        updateLobbyUi();
+        if (!lobbyState.lobby.isHost) {
+          applyIncomingLobbyPlayback(data.playback, data.hostUsername || lobbyState.lobby.hostUsername, data.serverNow);
+        }
+      }
+    } catch (e) {}
+  });
+
+  es.addEventListener('chat_message', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (!lobbyState.lobby || !data.message || data.lobbyId !== lobbyState.lobby.id) return;
+      lobbyState.lobby.messages.push(data.message);
+      if (lobbyState.lobby.messages.length > 80) {
+        lobbyState.lobby.messages = lobbyState.lobby.messages.slice(-80);
+      }
+      const chatVisibleInModal = lobbyModal && !lobbyModal.classList.contains('hidden') && lobbyState.activeModalTab === 'chat';
+      const chatVisibleInPlayer = !itemModal.classList.contains('hidden') && lobbyState.chatOpenInPlayer;
+      if (!chatVisibleInModal && !chatVisibleInPlayer && data.message.type === 'user' && data.message.username?.toLowerCase() !== (authUser || '').toLowerCase()) {
+        lobbyState.unreadMessages += 1;
+      }
+      updateLobbyUi();
+    } catch (e) {}
+  });
+
+  es.addEventListener('lobby_closed', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      setCurrentLobby(null, true);
+      showPlayerOsd(data.reason || 'Лобби закрыто');
+    } catch (e) {}
+  });
+
+  es.addEventListener('lobby_kicked', ev => {
+    try {
+      const data = JSON.parse(ev.data);
+      setCurrentLobby(null, true);
+      showPlayerOsd(data.reason || 'Вас исключили из лобби');
+    } catch (e) {}
+  });
+}
+
+function syncLobbyAuthSession() {
+  if (authToken && authUser) {
+    connectLobbyEvents();
+    refreshLobbyState();
+  } else {
+    disconnectLobbyEvents();
+    lobbyState.invites = [];
+    lobbyState.users = [];
+    lobbyState.onlineTotal = 0;
+    setCurrentLobby(null, true);
+  }
+}
+
+async function emitHostPlaybackSync(actionLabel = '', overrides = {}) {
+  if (!isLobbyHost() || isApplyingLobbySync) return;
+  const mediaItem = overrides.mediaItem !== undefined ? overrides.mediaItem : state.currentItem;
+  if (!mediaItem) return;
+  const pausedVal = typeof overrides.paused === 'boolean'
+    ? overrides.paused
+    : (!html5Video || html5Video.paused || html5Video.ended);
+  const timeVal = typeof overrides.currentTime === 'number'
+    ? overrides.currentTime
+    : (Number.isFinite(html5Video?.currentTime) ? html5Video.currentTime : 0);
+
+  try {
+    const res = await lobbyApi('/api/lobby/sync', 'POST', {
+      mediaItem,
+      season: Number(overrides.season ?? state.selectedSeason) || 1,
+      episode: Number(overrides.episode ?? state.selectedEpisode) || 1,
+      voice: overrides.voice ?? state.selectedVoice ?? '',
+      balancer: overrides.balancer ?? state.selectedBalancer ?? 'direct',
+      paused: pausedVal,
+      currentTime: Math.max(0, timeVal),
+      actionLabel
+    });
+    if (res.serverNow) lobbyState.serverClockOffsetMs = res.serverNow - Date.now();
+    if (res.playback && lobbyState.lobby) {
+      lobbyState.lobby.playback = res.playback;
+      lobbyState.lastSeqApplied = res.playback.seq || lobbyState.lastSeqApplied;
+      updateLobbyUi();
+    }
+  } catch (e) {}
+}
+
+function scheduleHostPlaybackSync(actionLabel = '', delayMs = 80, overrides = {}) {
+  if (!isLobbyHost() || isApplyingLobbySync) return;
+  if (lobbyState.hostSyncTimer) clearTimeout(lobbyState.hostSyncTimer);
+  lobbyState.hostSyncTimer = setTimeout(() => {
+    lobbyState.hostSyncTimer = null;
+    emitHostPlaybackSync(actionLabel, overrides);
+  }, delayMs);
+}
+
+function startHostSyncHeartbeat() {
+  stopHostSyncHeartbeat();
+  lobbyState.hostHeartbeatTimer = setInterval(() => {
+    if (!isLobbyHost()) return;
+    if (!itemModal.classList.contains('hidden') && state.currentItem && html5Video && !html5Video.paused && !html5Video.ended) {
+      emitHostPlaybackSync('', { paused: false, currentTime: html5Video.currentTime });
+    }
+  }, 6000);
+}
+
+function stopHostSyncHeartbeat() {
+  if (lobbyState.hostHeartbeatTimer) {
+    clearInterval(lobbyState.hostHeartbeatTimer);
+    lobbyState.hostHeartbeatTimer = null;
+  }
+}
+
+function applyIncomingLobbyPlayback(playback, hostUsername = 'хост', serverNow = null) {
+  if (!playback || !playback.mediaItem || !isLobbyGuest()) return;
+  if (serverNow) lobbyState.serverClockOffsetMs = serverNow - Date.now();
+  const seq = Number(playback.seq) || 0;
+  if (seq > 0 && seq < lobbyState.lastSeqApplied) return;
+  lobbyState.lastSeqApplied = seq;
+
+  const targetTime = computeLobbyTargetTime(playback);
+  const sameMovieOpen = !itemModal.classList.contains('hidden') && state.currentItem?.imdbId === playback.imdbId;
+  const sameEpisode = Number(state.selectedSeason) === Number(playback.season || 1) &&
+    Number(state.selectedEpisode) === Number(playback.episode || 1) &&
+    state.selectedBalancer === (playback.balancer || 'direct');
+
+  if (!sameMovieOpen) {
+    lobbyState.pendingSyncPlayback = playback;
+    if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+      lobbyModal.classList.add('hidden');
+    }
+    openItemModal(playback.mediaItem, 'player', {
+      season: playback.season || 1,
+      episode: playback.episode || 1,
+      voice: playback.voice || '',
+      balancer: playback.balancer || 'direct',
+      resumeSeconds: targetTime,
+      paused: Boolean(playback.paused)
+    });
+    showPlayerOsd(`${hostUsername}: ${playback.actionLabel || playback.mediaItem.title}`);
+    return;
+  }
+
+  if (!sameEpisode) {
+    lobbyState.pendingSyncPlayback = playback;
+    isApplyingLobbySync = true;
+    state.selectedSeason = Number(playback.season) || 1;
+    state.selectedEpisode = Number(playback.episode) || 1;
+    state.selectedBalancer = playback.balancer || 'direct';
+    if (playback.voice) state.preferredVoice = playback.voice;
+    updateBalancerButtons();
+    populatePlayerControls(state.currentItem);
+    markFilesTabDirtyOrRefresh(state.currentItem);
+    startPlayback(targetTime, true, { startPaused: Boolean(playback.paused) });
+    setTimeout(() => { isApplyingLobbySync = false; }, 120);
+    showPlayerOsd(`${hostUsername}: Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`);
+    return;
+  }
+
+  // Same movie and episode currently loaded in player
+  isApplyingLobbySync = true;
+  try {
+    if (Math.abs((html5Video.currentTime || 0) - targetTime) > 1.8 && html5Video.readyState >= 1) {
+      html5Video.currentTime = targetTime;
+    }
+    if (playback.paused) {
+      lobbyState.pendingAutoplayBlocked = false;
+      if (!html5Video.paused) html5Video.pause();
+      if (playback.actionLabel) showPlayerOsd(`${hostUsername}: ${playback.actionLabel}`);
+    } else if (html5Video.paused) {
+      const p = html5Video.play();
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          lobbyState.pendingAutoplayBlocked = false;
+          updateLobbyUi();
+        }).catch(() => {
+          lobbyState.pendingAutoplayBlocked = true;
+          updateLobbyUi();
+          showPlayerOsd(`Нажмите ▶ чтобы продолжить с ${hostUsername}`);
+        });
+      }
+      if (playback.actionLabel) showPlayerOsd(`${hostUsername}: ${playback.actionLabel}`);
+    }
+    updateCustomVideoBar();
+    updateLobbyUi();
+  } finally {
+    setTimeout(() => { isApplyingLobbySync = false; }, 120);
+  }
+}
+
+async function inviteUserToLobby(targetUsername, btnEl = null) {
+  if (!lobbyState.lobby) return;
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await lobbyApi('/api/lobby/invite', 'POST', { targetUsername });
+    showPlayerOsd(`Приглашение отправлено: ${res.invitedUsername}`);
+    await fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+  } catch (err) {
+    showPlayerOsd(err.message);
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+async function joinLobbyById(lobbyId) {
+  if (!lobbyId) return;
+  try {
+    const data = await lobbyApi('/api/lobby/join', 'POST', { lobbyId });
+    lobbyState.invites = Array.isArray(data.invites) ? data.invites : [];
+    setCurrentLobby(data.lobby);
+    showPlayerOsd(`Вы в лобби «${data.lobby.name}»`);
+    fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+  } catch (err) {
+    showPlayerOsd(err.message);
+  }
+}
+
+async function declineLobbyInvite(lobbyId) {
+  try {
+    const data = await lobbyApi('/api/lobby/decline', 'POST', { lobbyId });
+    lobbyState.invites = Array.isArray(data.invites) ? data.invites : [];
+    updateLobbyUi();
+  } catch (e) {}
+}
+
+async function kickLobbyMember(targetUsername) {
+  try {
+    const data = await lobbyApi('/api/lobby/kick', 'POST', { targetUsername });
+    setCurrentLobby(data.lobby, true);
+    showPlayerOsd(`${targetUsername} исключён`);
+    fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+  } catch (err) {
+    showPlayerOsd(err.message);
+  }
+}
+
+async function transferLobbyHost(targetUsername) {
+  try {
+    const data = await lobbyApi('/api/lobby/transfer-host', 'POST', { targetUsername });
+    setCurrentLobby(data.lobby, true);
+    showPlayerOsd(`Новый главный: ${targetUsername}`);
+  } catch (err) {
+    showPlayerOsd(err.message);
+  }
+}
+
+async function sendLobbyChatText(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text || !lobbyState.lobby) return false;
+  try {
+    await lobbyApi('/api/lobby/chat', 'POST', { text });
+    return true;
+  } catch (err) {
+    showPlayerOsd(err.message);
+    return false;
+  }
+}
+
+function togglePlayerChatDrawer(forceState = null) {
+  if (!lobbyState.lobby) return;
+  lobbyState.chatOpenInPlayer = forceState === null ? !lobbyState.chatOpenInPlayer : Boolean(forceState);
+  if (lobbyState.chatOpenInPlayer) {
+    lobbyState.unreadMessages = 0;
+  }
+  updateLobbyUi();
+}
+
+function openLobbyModal() {
+  if (!lobbyModal) return;
+  updateLobbyUi();
+  lobbyModal.classList.remove('hidden');
+  if (authToken) {
+    refreshLobbyState().then(() => fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || ''));
+  }
 }
 
 function updateResetFiltersButton() {
@@ -1151,9 +1997,16 @@ function getActiveEpisodeObj(item) {
   return seasonList.find(ep => Number(ep.episode) === Number(state.selectedEpisode)) || seasonList[0] || null;
 }
 
-async function openItemModal(itemSummary, initialTab = 'player') {
+async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride = null) {
+  if (!lobbyOverride && isLobbyGuest()) {
+    showPlayerOsd(`Фильм выбирает главный: ${lobbyState.lobby?.hostUsername || 'хост'}`);
+    return;
+  }
   const myOpenToken = ++modalOpenToken;
   filesTabDirty = true;
+  if (lobbyOverride && lobbyOverride.balancer) {
+    state.selectedBalancer = lobbyOverride.balancer;
+  }
   state.currentItem = {
     ...itemSummary,
     qualities: itemSummary.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
@@ -1166,11 +2019,11 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   document.body.style.overflow = 'hidden';
   clearTvFocus();
 
-  const savedHistory = state.history.find(h => h.imdbId === itemSummary.imdbId);
-  state.selectedSeason = savedHistory?.season || 1;
-  state.selectedEpisode = savedHistory?.episode || 1;
-  state.preferredVoice = savedHistory?.voice || '';
-  state.selectedVoice = savedHistory?.voice || (itemSummary.voices && itemSummary.voices[0]) || 'Рус. Дублированный';
+  const savedHistory = lobbyOverride ? null : state.history.find(h => h.imdbId === itemSummary.imdbId);
+  state.selectedSeason = lobbyOverride?.season || savedHistory?.season || 1;
+  state.selectedEpisode = lobbyOverride?.episode || savedHistory?.episode || 1;
+  state.preferredVoice = lobbyOverride?.voice || savedHistory?.voice || '';
+  state.selectedVoice = lobbyOverride?.voice || savedHistory?.voice || (itemSummary.voices && itemSummary.voices[0]) || 'Рус. Дублированный';
   state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
 
   // Immediately render card metadata so modal opens in 0ms
@@ -1221,11 +2074,13 @@ async function openItemModal(itemSummary, initialTab = 'player') {
 
   const item = state.currentItem;
   const seasonKeys = Object.keys(item.seasons || {}).map(Number).sort((a, b) => a - b);
-  state.selectedSeason = (savedHistory?.season && item.seasons?.[savedHistory.season]) ? savedHistory.season : (seasonKeys[0] || 1);
+  const desiredSeason = lobbyOverride?.season || savedHistory?.season;
+  state.selectedSeason = (desiredSeason && item.seasons?.[desiredSeason]) ? desiredSeason : (seasonKeys[0] || 1);
 
   const epsInSeason = item.seasons?.[state.selectedSeason] || [];
-  state.selectedEpisode = (savedHistory?.episode && epsInSeason.some(e => Number(e.episode) === Number(savedHistory.episode)))
-    ? savedHistory.episode
+  const desiredEpisode = lobbyOverride?.episode || savedHistory?.episode;
+  state.selectedEpisode = (desiredEpisode && epsInSeason.some(e => Number(e.episode) === Number(desiredEpisode)))
+    ? desiredEpisode
     : (epsInSeason[0]?.episode || 1);
 
   const activeEp = getActiveEpisodeObj(item);
@@ -1244,8 +2099,20 @@ async function openItemModal(itemSummary, initialTab = 'player') {
   }
   updateFavButtonState();
   updateBalancerButtons();
-  startPlayback(savedHistory?.currentTime || 0, true);
+  const resumeAt = lobbyOverride ? (Number(lobbyOverride.resumeSeconds) || 0) : (savedHistory?.currentTime || 0);
+  startPlayback(resumeAt, true, lobbyOverride ? { startPaused: Boolean(lobbyOverride.paused) } : null);
   revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+  if (!lobbyOverride && isLobbyHost()) {
+    emitHostPlaybackSync(`Запустил: ${item.title}`, {
+      mediaItem: item,
+      season: state.selectedSeason,
+      episode: state.selectedEpisode,
+      voice: state.selectedVoice,
+      balancer: state.selectedBalancer,
+      paused: false,
+      currentTime: resumeAt
+    });
+  }
 }
 
 function populateInfoTab(item) {
@@ -1406,6 +2273,7 @@ function populatePlayerControls(item) {
       sBtn.type = 'button';
       sBtn.textContent = `Сезон ${sNum}`;
       sBtn.addEventListener('click', () => {
+        if (guardLobbyGuestPlaybackControl()) return;
         state.selectedSeason = sNum;
         const firstEp = seasonsObj[sNum]?.[0]?.episode || 1;
         state.selectedEpisode = firstEp;
@@ -1413,6 +2281,9 @@ function populatePlayerControls(item) {
         markFilesTabDirtyOrRefresh(item);
         startPlayback(0, true);
         showPlayerOsd(`Сезон ${sNum}, Серия ${firstEp}`);
+        if (isLobbyHost()) {
+          emitHostPlaybackSync(`Сезон ${sNum}, Серия ${firstEp}`, { season: sNum, episode: firstEp, currentTime: 0, paused: false });
+        }
       });
       seasonButtons.appendChild(sBtn);
     }
@@ -1438,11 +2309,15 @@ function populatePlayerControls(item) {
         <span class="ep-name" title="${ep.title}">${ep.title}</span>
       `;
       epBtn.addEventListener('click', () => {
+        if (guardLobbyGuestPlaybackControl()) return;
         state.selectedEpisode = ep.episode;
         populatePlayerControls(item);
         markFilesTabDirtyOrRefresh(item);
         startPlayback(0, true);
         showPlayerOsd(`Сезон ${state.selectedSeason}, Серия ${ep.episode}`);
+        if (isLobbyHost()) {
+          emitHostPlaybackSync(`Серия ${ep.episode}`, { episode: ep.episode, currentTime: 0, paused: false });
+        }
       });
       episodeButtons.appendChild(epBtn);
     }
@@ -1739,10 +2614,14 @@ function revealVideoOverlayControls(timeoutMs = DEFAULT_CONTROLS_HIDE_MS) {
 
 function seekRelative(deltaSeconds) {
   if (!html5Video) return;
+  if (guardLobbyGuestPlaybackControl()) return;
   const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
   const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : Infinity;
   const target = Math.max(0, Math.min(dur, cur + deltaSeconds));
   html5Video.currentTime = target;
+  if (isLobbyHost()) {
+    scheduleHostPlaybackSync(`Перемотка ${deltaSeconds > 0 ? '+' : ''}${deltaSeconds}с`, 140, { currentTime: target });
+  }
 
   const dir = deltaSeconds < 0 ? -1 : 1;
   if (Math.abs(deltaSeconds) < 60 && seekStreakDir === dir) {
@@ -1845,7 +2724,41 @@ async function loadClientCleanEmbed(item, balancerName) {
   return false;
 }
 
-async function startPlayback(resumeSeconds = 0, forceReload = false) {
+function finishLobbyOrNormalPlay(targetEl, resumeSec, lobbyStartOpts) {
+  const pending = lobbyState.pendingSyncPlayback;
+  const shouldPause = Boolean(lobbyStartOpts?.startPaused || (isLobbyGuest() && pending?.paused));
+  const desiredTime = (isLobbyGuest() && pending)
+    ? computeLobbyTargetTime(pending)
+    : resumeSec;
+
+  if (desiredTime > 2) {
+    try { targetEl.currentTime = desiredTime; } catch (e) {}
+  }
+
+  if (shouldPause) {
+    isApplyingLobbySync = true;
+    targetEl.pause();
+    updateCustomVideoBar();
+    setTimeout(() => { isApplyingLobbySync = false; }, 100);
+    return;
+  }
+
+  const p = targetEl.play();
+  if (p && typeof p.then === 'function') {
+    p.then(() => {
+      lobbyState.pendingAutoplayBlocked = false;
+      updateLobbyUi();
+    }).catch(() => {
+      if (isLobbyGuest()) {
+        lobbyState.pendingAutoplayBlocked = true;
+        updateLobbyUi();
+        showPlayerOsd(`Нажмите ▶ чтобы смотреть с ${lobbyState.lobby?.hostUsername || 'главным'}`);
+      }
+    });
+  }
+}
+
+async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartOpts = null) {
   const item = state.currentItem;
   if (!item) return;
 
@@ -1875,7 +2788,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
         hlsInstance._desiredAudioTrackIdx = voiceIdx;
         applyDesiredAudioTrack(hlsInstance);
         switchQualityLevel(state.selectedQuality);
-        html5Video.play().catch(() => {});
+        finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
         return;
       }
 
@@ -1903,10 +2816,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
       activeHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
         applyDesiredAudioTrack(activeHls);
         switchQualityLevel(state.selectedQuality);
-        if (resumeSeconds > 2) {
-          html5Video.currentTime = resumeSeconds;
-        }
-        html5Video.play().catch(() => {});
+        finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
       });
 
       activeHls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => applyDesiredAudioTrack(activeHls));
@@ -1923,10 +2833,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false) {
       currentLoadedHlsUrl = nativeUrl;
       html5Video.src = nativeUrl;
       html5Video.addEventListener('loadedmetadata', () => {
-        if (resumeSeconds > 2) {
-          try { html5Video.currentTime = resumeSeconds; } catch (e) {}
-        }
-        html5Video.play().catch(() => {});
+        finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
       }, { once: true });
       return;
     }
@@ -1990,6 +2897,18 @@ function switchModalTab(tabName) {
 }
 
 function closeItemModal() {
+  const closedCurTime = Number.isFinite(html5Video?.currentTime) ? html5Video.currentTime : 0;
+  const closedItem = state.currentItem;
+  if (isLobbyHost() && closedItem) {
+    emitHostPlaybackSync('Главный приостановил просмотр', {
+      mediaItem: closedItem,
+      paused: true,
+      currentTime: closedCurTime
+    });
+  }
+  lobbyState.chatOpenInPlayer = false;
+  lobbyState.pendingAutoplayBlocked = false;
+  updateLobbyUi();
   exitVideoFullscreen();
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
@@ -2193,6 +3112,8 @@ function getVisibleFocusableWithRects() {
   let scope = document.body;
   if (isVideoFullscreen()) {
     scope = directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : videoStageArea;
+  } else if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+    scope = lobbyModal;
   } else if (installModal && !installModal.classList.contains('hidden')) {
     scope = installModal;
   } else if (accountModal && !accountModal.classList.contains('hidden')) {
@@ -2443,10 +3364,12 @@ if (theaterModeBtn && modalWindow) {
 
 if (restartVideoBtn) {
   restartVideoBtn.addEventListener('click', () => {
+    if (guardLobbyGuestPlaybackControl()) return;
     html5Video.currentTime = 0;
     html5Video.play().catch(() => {});
     saveLivePlaybackProgress();
     showPlayerOsd('С начала (0:00)');
+    if (isLobbyHost()) emitHostPlaybackSync('С начала (0:00)', { currentTime: 0, paused: false });
   });
 }
 
@@ -2516,6 +3439,7 @@ sandboxToggle.addEventListener('change', () => {
 
 function switchEpisodeStep(delta, osdPrefix = '') {
   if (!state.currentItem) return;
+  if (guardLobbyGuestPlaybackControl()) return;
   const target = getAdjacentEpisodeTarget(delta);
   if (!target) return;
   state.selectedSeason = target.season;
@@ -2523,9 +3447,12 @@ function switchEpisodeStep(delta, osdPrefix = '') {
   populatePlayerControls(state.currentItem);
   markFilesTabDirtyOrRefresh(state.currentItem);
   startPlayback(0, true);
-  revealVideoOverlayControls(3200);
+  revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   const label = `Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}`;
   showPlayerOsd(osdPrefix ? `${osdPrefix}: ${label}` : label);
+  if (isLobbyHost()) {
+    emitHostPlaybackSync(label, { season: state.selectedSeason, episode: state.selectedEpisode, currentTime: 0, paused: false });
+  }
 }
 
 prevEpBtn.addEventListener('click', () => switchEpisodeStep(-1));
@@ -2566,6 +3493,20 @@ fullscreenBtn.addEventListener('click', toggleVideoFullscreen);
 
 function togglePlayPauseVideo() {
   if (!html5Video) return;
+  if (lobbyState.pendingAutoplayBlocked && isLobbyGuest()) {
+    lobbyState.pendingAutoplayBlocked = false;
+    const latest = lobbyState.lobby?.playback;
+    if (latest) {
+      const targetSec = computeLobbyTargetTime(latest);
+      if (targetSec > 0 && html5Video.readyState >= 1) html5Video.currentTime = targetSec;
+    }
+    html5Video.play().catch(() => {});
+    updateCustomVideoBar();
+    updateLobbyUi();
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    return;
+  }
+  if (guardLobbyGuestPlaybackControl()) return;
   if (html5Video.paused || html5Video.ended) {
     html5Video.play().catch(() => {});
   } else {
@@ -2607,6 +3548,12 @@ if (vcMuteBtn) {
 
 if (videoProgressRange) {
   videoProgressRange.addEventListener('input', () => {
+    if (isLobbyGuest()) {
+      isScrubbingVideo = false;
+      updateCustomVideoBar();
+      guardLobbyGuestPlaybackControl();
+      return;
+    }
     isScrubbingVideo = true;
     const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
     const ratio = Number(videoProgressRange.value) / 1000;
@@ -2617,10 +3564,18 @@ if (videoProgressRange) {
     revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   });
   videoProgressRange.addEventListener('change', () => {
+    if (guardLobbyGuestPlaybackControl()) {
+      isScrubbingVideo = false;
+      updateCustomVideoBar();
+      return;
+    }
     const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
     if (dur > 0) {
       const target = (Number(videoProgressRange.value) / 1000) * dur;
       html5Video.currentTime = target;
+      if (isLobbyHost()) {
+        scheduleHostPlaybackSync(`Перемотка на ${formatPlayerTime(target)}`, 80, { currentTime: target });
+      }
     }
     isScrubbingVideo = false;
     updateSmartVideoOverlay();
@@ -2666,10 +3621,21 @@ html5Video.addEventListener('timeupdate', () => {
   });
 });
 
+html5Video.addEventListener('seeked', () => {
+  updateSmartVideoOverlay();
+  updateCustomVideoBar();
+  if (!isApplyingLobbySync && isLobbyHost() && !itemModal.classList.contains('hidden')) {
+    scheduleHostPlaybackSync('Перемотка', 120);
+  }
+});
+
 html5Video.addEventListener('play', () => {
   updateSmartVideoOverlay();
   updateCustomVideoBar();
   revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+  if (!isApplyingLobbySync && isLobbyHost() && !itemModal.classList.contains('hidden')) {
+    scheduleHostPlaybackSync('Продолжил просмотр', 40, { paused: false });
+  }
 });
 
 html5Video.addEventListener('playing', () => {
@@ -2690,13 +3656,22 @@ html5Video.addEventListener('pause', () => {
   }
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
+  if (!isApplyingLobbySync && isLobbyHost() && !itemModal.classList.contains('hidden')) {
+    scheduleHostPlaybackSync('Поставил на паузу', 40, { paused: true });
+  }
 });
 
 html5Video.addEventListener('ended', () => {
   updateCustomVideoBar();
   saveLivePlaybackProgress();
-  switchEpisodeStep(1, 'Автопереход');
+  if (!isLobbyGuest()) {
+    switchEpisodeStep(1, 'Автопереход');
+  }
 });
+
+function isVideoOverlayControlTarget(el) {
+  return Boolean(el && el.closest && el.closest('.video-smart-overlay, .custom-video-bar, .video-center-play, .player-chat-drawer, .lobby-player-pill, .lobby-autoplay-btn'));
+}
 
 if (videoStageArea) {
   videoStageArea.addEventListener('pointermove', e => {
@@ -2722,7 +3697,7 @@ if (videoStageArea) {
   }, { passive: true });
 
   videoStageArea.addEventListener('click', e => {
-    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+    if (isVideoOverlayControlTarget(e.target)) {
       return;
     }
     if (e.pointerType === 'touch' || (Date.now() - lastTouchTapTime) < 650) return;
@@ -2734,7 +3709,7 @@ if (videoStageArea) {
   });
 
   videoStageArea.addEventListener('touchend', e => {
-    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+    if (isVideoOverlayControlTarget(e.target)) {
       if (videoStageArea.classList.contains('controls-active') && !html5Video.paused) {
         revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
       }
@@ -2780,7 +3755,7 @@ if (videoStageArea) {
   }, { passive: false });
 
   videoStageArea.addEventListener('dblclick', e => {
-    if (e.target.closest('.video-smart-overlay') || e.target.closest('.custom-video-bar') || e.target.closest('.video-center-play')) {
+    if (isVideoOverlayControlTarget(e.target)) {
       return;
     }
     if (videoClickTimer) {
@@ -2824,12 +3799,24 @@ document.addEventListener('keydown', e => {
     return;
   }
 
-  // Back / Escape handling: first exit fullscreen, then close top-most modal
+  // Back / Escape handling: first exit fullscreen / close chat, then close top-most modal
   if (isBackKey(e)) {
+    if (playerChatDrawer && !playerChatDrawer.classList.contains('hidden')) {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePlayerChatDrawer(false);
+      return;
+    }
     if (isVideoFullscreen()) {
       e.preventDefault();
       e.stopPropagation();
       exitVideoFullscreen();
+      return;
+    }
+    if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+      e.preventDefault();
+      e.stopPropagation();
+      lobbyModal.classList.add('hidden');
       return;
     }
     if (installModal && !installModal.classList.contains('hidden')) {
@@ -3211,6 +4198,184 @@ if (pwaInstallActionBtn) {
   });
 }
 
+// Watch Party / Lobby Event Listeners
+if (lobbyBtn) lobbyBtn.addEventListener('click', openLobbyModal);
+if (lobbyPlayerPill) lobbyPlayerPill.addEventListener('click', openLobbyModal);
+if (closeLobbyModalBtn) closeLobbyModalBtn.addEventListener('click', () => lobbyModal.classList.add('hidden'));
+if (lobbyModal) {
+  lobbyModal.addEventListener('click', e => {
+    if (e.target === lobbyModal) lobbyModal.classList.add('hidden');
+  });
+}
+
+if (lobbyLoginRedirectBtn) {
+  lobbyLoginRedirectBtn.addEventListener('click', () => {
+    lobbyModal.classList.add('hidden');
+    if (accountModal) {
+      updateAccountUI();
+      accountModal.classList.remove('hidden');
+    }
+  });
+}
+
+if (lobbyCreateForm) {
+  lobbyCreateForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = lobbyNameInput ? lobbyNameInput.value.trim() : '';
+    try {
+      const data = await lobbyApi('/api/lobby/create', 'POST', { name });
+      if (lobbyNameInput) lobbyNameInput.value = '';
+      setCurrentLobby(data.lobby, true);
+      showPlayerOsd(`Создано лобби «${data.lobby.name}»`);
+      fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || '');
+    } catch (err) {
+      showPlayerOsd(err.message);
+    }
+  });
+}
+
+if (lobbyJoinCodeForm) {
+  lobbyJoinCodeForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const code = lobbyJoinCodeInput ? lobbyJoinCodeInput.value.trim().toUpperCase() : '';
+    if (!code) return;
+    await joinLobbyById(code);
+    if (lobbyJoinCodeInput) lobbyJoinCodeInput.value = '';
+  });
+}
+
+if (lobbyHubRefreshOnlineBtn) {
+  lobbyHubRefreshOnlineBtn.addEventListener('click', () => fetchLobbyUsers(''));
+}
+
+if (lobbySearchRefreshBtn) {
+  lobbySearchRefreshBtn.addEventListener('click', () => fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || ''));
+}
+
+if (lobbyUserSearchInput) {
+  lobbyUserSearchInput.addEventListener('input', () => {
+    if (lobbyState.searchTimer) clearTimeout(lobbyState.searchTimer);
+    lobbyState.searchTimer = setTimeout(() => {
+      fetchLobbyUsers(lobbyUserSearchInput.value.trim());
+    }, 220);
+  });
+}
+
+if (lobbyRoomCodeBadge) {
+  lobbyRoomCodeBadge.addEventListener('click', async () => {
+    const code = lobbyState.lobby?.id || '';
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showPlayerOsd(`Код лобби скопирован: ${code}`);
+    } catch (e) {
+      showPlayerOsd(`Код лобби: ${code}`);
+    }
+  });
+}
+
+if (lobbyBrowseFilmsBtn) {
+  lobbyBrowseFilmsBtn.addEventListener('click', () => {
+    lobbyModal.classList.add('hidden');
+  });
+}
+
+function jumpToCurrentLobbyMedia() {
+  const pb = lobbyState.lobby?.playback;
+  if (!pb || !pb.mediaItem) return;
+  lobbyModal.classList.add('hidden');
+  const targetSec = computeLobbyTargetTime(pb);
+  openItemModal(pb.mediaItem, 'player', {
+    season: pb.season || 1,
+    episode: pb.episode || 1,
+    voice: pb.voice || '',
+    balancer: pb.balancer || 'direct',
+    resumeSeconds: targetSec,
+    paused: Boolean(pb.paused)
+  });
+}
+
+if (lobbyOpenPlaybackBtn) lobbyOpenPlaybackBtn.addEventListener('click', jumpToCurrentLobbyMedia);
+if (lobbySyncJumpBtn) lobbySyncJumpBtn.addEventListener('click', jumpToCurrentLobbyMedia);
+
+if (lobbyLeaveBtn) {
+  lobbyLeaveBtn.addEventListener('click', async () => {
+    try { await lobbyApi('/api/lobby/leave', 'POST', {}); } catch (e) {}
+    setCurrentLobby(null, true);
+    showPlayerOsd('Вы вышли из лобби');
+  });
+}
+
+if (lobbyCloseRoomBtn) {
+  lobbyCloseRoomBtn.addEventListener('click', async () => {
+    try { await lobbyApi('/api/lobby/close', 'POST', {}); } catch (e) {}
+    setCurrentLobby(null, true);
+    showPlayerOsd('Лобби закрыто');
+  });
+}
+
+if (lobbyTabMembersBtn) lobbyTabMembersBtn.addEventListener('click', () => setLobbyModalTab('members'));
+if (lobbyTabChatBtn) lobbyTabChatBtn.addEventListener('click', () => setLobbyModalTab('chat'));
+
+if (vcLobbyChatBtn) {
+  vcLobbyChatBtn.addEventListener('click', () => {
+    togglePlayerChatDrawer();
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+  });
+}
+
+if (closePlayerChatBtn) {
+  closePlayerChatBtn.addEventListener('click', () => togglePlayerChatDrawer(false));
+}
+
+if (playerChatForm) {
+  playerChatForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!playerChatInput) return;
+    const text = playerChatInput.value;
+    playerChatInput.value = '';
+    await sendLobbyChatText(text);
+  });
+}
+
+if (lobbyModalChatForm) {
+  lobbyModalChatForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!lobbyModalChatInput) return;
+    const text = lobbyModalChatInput.value;
+    lobbyModalChatInput.value = '';
+    await sendLobbyChatText(text);
+  });
+}
+
+if (lobbyAutoplayResumeBtn) {
+  lobbyAutoplayResumeBtn.addEventListener('click', () => {
+    lobbyState.pendingAutoplayBlocked = false;
+    const pb = lobbyState.lobby?.playback;
+    if (pb && html5Video.readyState >= 1) {
+      html5Video.currentTime = computeLobbyTargetTime(pb);
+    }
+    html5Video.play().catch(() => {});
+    updateLobbyUi();
+  });
+}
+
+if (inviteToastAcceptBtn) {
+  inviteToastAcceptBtn.addEventListener('click', async () => {
+    const code = lobbyInviteToast?.dataset.lobbyId || '';
+    if (!code) return;
+    await joinLobbyById(code);
+    openLobbyModal();
+  });
+}
+
+if (inviteToastDeclineBtn) {
+  inviteToastDeclineBtn.addEventListener('click', async () => {
+    const code = lobbyInviteToast?.dataset.lobbyId || '';
+    if (code) await declineLobbyInvite(code);
+  });
+}
+
 // Clear TV focus highlight when user switches to mouse/touch
 document.addEventListener('pointerdown', clearTvFocus);
 
@@ -3219,5 +4384,6 @@ applySavedAudioPreferences();
 updateCustomVideoBar();
 updateBadges();
 updateAccountUI();
+syncLobbyAuthSession();
 if (authToken) pullAccountSync(true);
 loadCatalog();
