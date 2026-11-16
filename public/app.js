@@ -47,6 +47,12 @@ let lastSmartOverlayKey = '';
 let lastOverlayRevealTs = 0;
 let currentTvFocusedEl = null;
 
+let authToken = localStorage.getItem('spbguka_auth_token') || '';
+let authUser = localStorage.getItem('spbguka_auth_user') || '';
+let authMode = 'login';
+let accountSyncTimer = null;
+let lastAccountPullTs = 0;
+
 const clientStreamCache = new Map();
 
 function getClientMirrorList(preferredMirror = 'direct') {
@@ -425,6 +431,29 @@ const parsersModal = document.getElementById('parsersModal');
 const parsersStatusBtn = document.getElementById('parsersStatusBtn');
 const closeParsersModalBtn = document.getElementById('closeParsersModalBtn');
 
+// Account & Sync Elements
+const accountBtn = document.getElementById('accountBtn');
+const accountDot = document.getElementById('accountDot');
+const accountBtnLabel = document.getElementById('accountBtnLabel');
+const accountModal = document.getElementById('accountModal');
+const closeAccountModalBtn = document.getElementById('closeAccountModalBtn');
+const authGuestView = document.getElementById('authGuestView');
+const authProfileView = document.getElementById('authProfileView');
+const authTabLogin = document.getElementById('authTabLogin');
+const authTabRegister = document.getElementById('authTabRegister');
+const authForm = document.getElementById('authForm');
+const authUsernameInput = document.getElementById('authUsernameInput');
+const authPasswordInput = document.getElementById('authPasswordInput');
+const authMessage = document.getElementById('authMessage');
+const authSubmitBtn = document.getElementById('authSubmitBtn');
+const profileAvatar = document.getElementById('profileAvatar');
+const profileUsername = document.getElementById('profileUsername');
+const profileSyncStatus = document.getElementById('profileSyncStatus');
+const profileHistoryCount = document.getElementById('profileHistoryCount');
+const profileFavoritesCount = document.getElementById('profileFavoritesCount');
+const syncNowBtn = document.getElementById('syncNowBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+
 const CATEGORY_TITLES = {
   all: 'Весь каталог',
   popular: 'Популярное сейчас',
@@ -501,6 +530,7 @@ function updateBadges() {
 function saveFavorites() {
   localStorage.setItem('spbguka_favorites', JSON.stringify(state.favorites));
   updateBadges();
+  updateAccountUI();
 }
 
 function toggleFavorite(item) {
@@ -513,6 +543,7 @@ function toggleFavorite(item) {
     state.favorites.unshift(item);
   }
   saveFavorites();
+  scheduleAccountPush('replace', false);
   return added;
 }
 
@@ -550,6 +581,8 @@ function addToHistory(item, season, episode, voice, quality, currentTime = 0, du
   state.history = [entry, ...state.history.filter(x => x.imdbId !== item.imdbId)].slice(0, 40);
   localStorage.setItem('spbguka_history', JSON.stringify(state.history));
   updateBadges();
+  updateAccountUI();
+  scheduleAccountPush('merge', false);
 }
 
 function saveLivePlaybackProgress() {
@@ -563,6 +596,7 @@ function saveLivePlaybackProgress() {
     if (dur > 60) state.history[idx].durationSeconds = dur;
     state.history[idx].updatedAt = Date.now();
     localStorage.setItem('spbguka_history', JSON.stringify(state.history));
+    scheduleAccountPush('merge', false);
   }
 }
 
@@ -570,6 +604,8 @@ function removeFromHistory(imdbId) {
   state.history = state.history.filter(x => x.imdbId !== imdbId);
   localStorage.setItem('spbguka_history', JSON.stringify(state.history));
   updateBadges();
+  updateAccountUI();
+  scheduleAccountPush('replace', false);
   if (state.category === 'history') loadCatalog();
 }
 
@@ -577,7 +613,136 @@ function clearHistory() {
   state.history = [];
   localStorage.setItem('spbguka_history', '[]');
   updateBadges();
+  updateAccountUI();
+  scheduleAccountPush('replace', false);
   if (state.category === 'history') loadCatalog();
+}
+
+// --- Account & Cross-Device Progress Sync ---
+function setAuthSession(token, username) {
+  authToken = token || '';
+  authUser = username || '';
+  if (authToken) localStorage.setItem('spbguka_auth_token', authToken);
+  else localStorage.removeItem('spbguka_auth_token');
+  if (authUser) localStorage.setItem('spbguka_auth_user', authUser);
+  else localStorage.removeItem('spbguka_auth_user');
+  updateAccountUI();
+}
+
+function updateAccountUI() {
+  const loggedIn = Boolean(authToken && authUser);
+  if (accountBtn) accountBtn.classList.toggle('is-logged-in', loggedIn);
+  if (accountDot) accountDot.classList.toggle('hidden', !loggedIn);
+  if (accountBtnLabel) accountBtnLabel.textContent = loggedIn ? authUser : 'Войти';
+  if (authGuestView) authGuestView.classList.toggle('hidden', loggedIn);
+  if (authProfileView) authProfileView.classList.toggle('hidden', !loggedIn);
+  if (loggedIn) {
+    if (profileAvatar) profileAvatar.textContent = authUser.slice(0, 1).toUpperCase();
+    if (profileUsername) profileUsername.textContent = authUser;
+    if (profileHistoryCount) profileHistoryCount.textContent = String(state.history.length);
+    if (profileFavoritesCount) profileFavoritesCount.textContent = String(state.favorites.length);
+  }
+}
+
+function applySyncedUser(userPayload) {
+  if (!userPayload) return;
+  if (userPayload.username) {
+    authUser = userPayload.username;
+    localStorage.setItem('spbguka_auth_user', authUser);
+  }
+  if (Array.isArray(userPayload.history)) {
+    state.history = userPayload.history;
+    localStorage.setItem('spbguka_history', JSON.stringify(state.history));
+  }
+  if (Array.isArray(userPayload.favorites)) {
+    state.favorites = userPayload.favorites;
+    localStorage.setItem('spbguka_favorites', JSON.stringify(state.favorites));
+  }
+  updateBadges();
+  updateAccountUI();
+  if (state.catalogItems && state.catalogItems.length > 0) {
+    if (state.category === 'history' || state.category === 'favorites') {
+      loadCatalog();
+    } else {
+      renderCatalogGrid(state.catalogItems);
+    }
+  }
+  if (profileSyncStatus) {
+    const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    profileSyncStatus.textContent = `Синхронизировано в ${timeStr}`;
+  }
+}
+
+async function pushAccountSync(mode = 'merge', keepalive = false) {
+  if (!authToken) return false;
+  try {
+    const res = await fetch('/api/account/sync', {
+      method: 'POST',
+      keepalive,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        mode,
+        history: state.history,
+        favorites: state.favorites
+      })
+    });
+    if (res.status === 401) {
+      setAuthSession('', '');
+      return false;
+    }
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data && data.user && mode === 'merge') {
+      applySyncedUser(data.user);
+    } else if (profileSyncStatus) {
+      const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      profileSyncStatus.textContent = `Сохранено в ${timeStr}`;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function scheduleAccountPush(mode = 'merge', immediate = false) {
+  if (!authToken) return;
+  if (immediate) {
+    if (accountSyncTimer) clearTimeout(accountSyncTimer);
+    accountSyncTimer = null;
+    pushAccountSync(mode, true);
+    return;
+  }
+  if (accountSyncTimer) clearTimeout(accountSyncTimer);
+  accountSyncTimer = setTimeout(() => {
+    accountSyncTimer = null;
+    pushAccountSync(mode, false);
+  }, 1200);
+}
+
+async function pullAccountSync(force = false) {
+  if (!authToken) return false;
+  const now = Date.now();
+  if (!force && (now - lastAccountPullTs) < 8000) return false;
+  lastAccountPullTs = now;
+  try {
+    const res = await fetch('/api/account/sync', {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    if (res.status === 401) {
+      setAuthSession('', '');
+      return false;
+    }
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data && data.user) {
+      applySyncedUser(data.user);
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 function updateResetFiltersButton() {
@@ -1496,6 +1661,7 @@ function switchModalTab(tabName) {
 
 function closeItemModal() {
   saveLivePlaybackProgress();
+  scheduleAccountPush('merge', true);
   modalOpenToken++;
   playbackRequestToken++;
   if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
@@ -1906,6 +2072,7 @@ html5Video.addEventListener('pause', () => {
   if (overlayControlsTimer) clearTimeout(overlayControlsTimer);
   if (videoStageArea) videoStageArea.classList.add('controls-active');
   saveLivePlaybackProgress();
+  scheduleAccountPush('merge', true);
 });
 
 html5Video.addEventListener('ended', () => {
@@ -2011,6 +2178,11 @@ document.addEventListener('keydown', e => {
 
   // Back / Escape handling (PC Escape, LG webOS 461, Samsung Tizen 10009)
   if (e.key === 'Escape' || e.keyCode === 461 || e.keyCode === 10009) {
+    if (accountModal && !accountModal.classList.contains('hidden')) {
+      e.preventDefault();
+      accountModal.classList.add('hidden');
+      return;
+    }
     if (!parsersModal.classList.contains('hidden')) {
       e.preventDefault();
       parsersModal.classList.add('hidden');
@@ -2081,9 +2253,137 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// Account & Cross-Device Sync Listeners
+function setAuthTabMode(mode) {
+  authMode = mode === 'register' ? 'register' : 'login';
+  if (authTabLogin) authTabLogin.classList.toggle('active', authMode === 'login');
+  if (authTabRegister) authTabRegister.classList.toggle('active', authMode === 'register');
+  if (authPasswordInput) {
+    authPasswordInput.autocomplete = authMode === 'register' ? 'new-password' : 'current-password';
+  }
+  if (authSubmitBtn) {
+    authSubmitBtn.textContent = authMode === 'register' ? 'Создать аккаунт' : 'Войти в аккаунт';
+  }
+  if (authMessage) {
+    authMessage.classList.add('hidden');
+    authMessage.textContent = '';
+  }
+}
+
+function showAuthMessage(text, isOk = false) {
+  if (!authMessage) return;
+  authMessage.textContent = text;
+  authMessage.classList.toggle('is-ok', isOk);
+  authMessage.classList.remove('hidden');
+}
+
+if (accountBtn) {
+  accountBtn.addEventListener('click', () => {
+    updateAccountUI();
+    if (authToken) pullAccountSync(true);
+    accountModal.classList.remove('hidden');
+  });
+}
+
+if (closeAccountModalBtn) {
+  closeAccountModalBtn.addEventListener('click', () => accountModal.classList.add('hidden'));
+}
+
+if (accountModal) {
+  accountModal.addEventListener('click', e => {
+    if (e.target === accountModal) accountModal.classList.add('hidden');
+  });
+}
+
+if (authTabLogin) authTabLogin.addEventListener('click', () => setAuthTabMode('login'));
+if (authTabRegister) authTabRegister.addEventListener('click', () => setAuthTabMode('register'));
+
+if (authForm) {
+  authForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const username = authUsernameInput.value.trim();
+    const password = authPasswordInput.value;
+    if (username.length < 2) {
+      showAuthMessage('Никнейм должен быть не короче 2 символов');
+      return;
+    }
+    if (password.length < 4) {
+      showAuthMessage('Пароль должен быть не короче 4 символов');
+      return;
+    }
+
+    authSubmitBtn.disabled = true;
+    try {
+      const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password,
+          history: state.history,
+          favorites: state.favorites
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAuthMessage(data.error || 'Ошибка авторизации');
+        return;
+      }
+      setAuthSession(data.token, data.user?.username || username);
+      applySyncedUser(data.user);
+      authPasswordInput.value = '';
+      accountModal.classList.add('hidden');
+      showPlayerOsd(`Вход выполнен: ${authUser}`);
+    } catch (err) {
+      showAuthMessage('Нет связи с сервером');
+    } finally {
+      authSubmitBtn.disabled = false;
+    }
+  });
+}
+
+if (syncNowBtn) {
+  syncNowBtn.addEventListener('click', async () => {
+    syncNowBtn.disabled = true;
+    if (profileSyncStatus) profileSyncStatus.textContent = 'Синхронизация...';
+    const ok = await pushAccountSync('merge', false);
+    if (!ok && profileSyncStatus) profileSyncStatus.textContent = 'Ошибка соединения';
+    syncNowBtn.disabled = false;
+  });
+}
+
+if (logoutBtn) {
+  logoutBtn.addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+    setAuthSession('', '');
+    setAuthTabMode('login');
+  });
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    saveLivePlaybackProgress();
+    scheduleAccountPush('merge', true);
+  } else if (document.visibilityState === 'visible' && authToken) {
+    pullAccountSync(false);
+  }
+});
+
+window.addEventListener('focus', () => {
+  if (authToken) pullAccountSync(false);
+});
+
+window.addEventListener('pagehide', () => {
+  saveLivePlaybackProgress();
+  scheduleAccountPush('merge', true);
+});
+
 // Clear TV focus highlight when user switches to mouse/touch
 document.addEventListener('pointerdown', clearTvFocus);
 
 // Initialize
 updateBadges();
+updateAccountUI();
+if (authToken) pullAccountSync(true);
 loadCatalog();

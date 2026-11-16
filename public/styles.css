@@ -291,6 +291,45 @@ body {
   flex-shrink: 0;
 }
 
+.account-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: 7px 13px;
+  border-radius: 99px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 170px;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.account-pill:hover {
+  background: var(--bg-hover);
+  border-color: rgba(244, 63, 94, 0.5);
+}
+
+.account-pill.is-logged-in {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+#accountBtnLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex-shrink: 0;
+}
+
 /* Layout Shell */
 .app-shell {
   display: flex;
@@ -1932,6 +1971,140 @@ body {
   color: var(--text-muted);
 }
 
+/* Account & Sync Modal */
+.auth-mode-tabs {
+  margin-bottom: 14px;
+}
+
+.auth-mode-tabs .hdvb-tab {
+  flex: 1;
+}
+
+.auth-hint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.auth-field input {
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 0.92rem;
+  outline: none;
+}
+
+.auth-field input:focus {
+  border-color: var(--brand-light);
+}
+
+.auth-message {
+  font-size: 0.82rem;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(225, 29, 72, 0.14);
+  border: 1px solid rgba(225, 29, 72, 0.35);
+  color: #fda4af;
+}
+
+.auth-message.is-ok {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #86efac;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.profile-avatar {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-size: 1.25rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.profile-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.profile-sync-status {
+  font-size: 0.78rem;
+  color: var(--ok);
+}
+
+.profile-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.profile-stat-box {
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-stat-box .stat-label {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.profile-stat-box strong {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.profile-actions .btn-primary {
+  flex: 1;
+}
+
 /* Smart TV / 4K Large Screen (LG webOS, Linux HTPC) */
 @media (min-width: 1800px) {
   body {
@@ -1975,8 +2148,13 @@ body {
   #sidebarToggle,
   .brand-tag,
   .search-kbd,
-  .topbar-right {
+  #parsersStatusBtn {
     display: none;
+  }
+  .account-pill {
+    padding: 6px 10px;
+    font-size: 0.76rem;
+    max-width: 106px;
   }
   .sidebar {
     display: none !important;

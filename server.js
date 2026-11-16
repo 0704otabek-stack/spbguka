@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1274,12 +1275,368 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+// --- Account & Cross-Device Progress Sync Storage ---
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
+const SECRET_FILE = path.join(DATA_DIR, '.auth_secret');
+
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {}
+}
+
+function loadOrCreateAuthSecret() {
+  if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
+  ensureDataDir();
+  try {
+    if (fs.existsSync(SECRET_FILE)) {
+      const saved = fs.readFileSync(SECRET_FILE, 'utf8').trim();
+      if (saved.length >= 32) return saved;
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(SECRET_FILE, generated, 'utf8');
+    return generated;
+  } catch (e) {
+    return crypto.createHash('sha256').update(__dirname + '_spbguka_secret').digest('hex');
+  }
+}
+
+const AUTH_SECRET = loadOrCreateAuthSecret();
+
+function loadAccountsDb() {
+  ensureDataDir();
+  try {
+    if (fs.existsSync(ACCOUNTS_FILE)) {
+      const raw = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.users === 'object') return parsed;
+    }
+  } catch (e) {}
+  return { users: {} };
+}
+
+const accountsDb = loadAccountsDb();
+let accountsSaveTimer = null;
+
+function flushAccountsToDisk() {
+  ensureDataDir();
+  try {
+    const tmpPath = ACCOUNTS_FILE + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(accountsDb), 'utf8');
+    fs.renameSync(tmpPath, ACCOUNTS_FILE);
+  } catch (e) {
+    console.error('Failed to save accounts:', e.message);
+  }
+}
+
+function scheduleSaveAccounts(immediate = false) {
+  if (immediate) {
+    if (accountsSaveTimer) clearTimeout(accountsSaveTimer);
+    accountsSaveTimer = null;
+    flushAccountsToDisk();
+    return;
+  }
+  if (accountsSaveTimer) return;
+  accountsSaveTimer = setTimeout(() => {
+    accountsSaveTimer = null;
+    flushAccountsToDisk();
+  }, 500);
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hashHex] = stored.split(':');
+  const derived = crypto.scryptSync(String(password), salt, 64);
+  const storedBuf = Buffer.from(hashHex, 'hex');
+  if (derived.length !== storedBuf.length) return false;
+  return crypto.timingSafeEqual(derived, storedBuf);
+}
+
+function toBase64Url(buf) {
+  return Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function fromBase64Url(str) {
+  const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+  return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
+}
+
+function signAuthToken(usernameLower) {
+  const payload = {
+    u: usernameLower,
+    exp: Date.now() + 90 * 24 * 60 * 60 * 1000
+  };
+  const body = toBase64Url(JSON.stringify(payload));
+  const sig = toBase64Url(crypto.createHmac('sha256', AUTH_SECRET).update(body).digest());
+  return `${body}.${sig}`;
+}
+
+function verifyAuthToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  if (!body || !sig) return null;
+  const expectedSig = toBase64Url(crypto.createHmac('sha256', AUTH_SECRET).update(body).digest());
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+  try {
+    const payload = JSON.parse(fromBase64Url(body).toString('utf8'));
+    if (!payload.u || !payload.exp || payload.exp < Date.now()) return null;
+    return payload.u;
+  } catch (e) {
+    return null;
+  }
+}
+
+function getAuthTokenFromReq(req) {
+  const authHeader = req.headers['authorization'] || '';
+  if (authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  const cookieHeader = req.headers['cookie'] || '';
+  const match = cookieHeader.match(/(?:^|;\s*)spbguka_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function getAuthenticatedUser(req) {
+  const token = getAuthTokenFromReq(req);
+  const usernameLower = verifyAuthToken(token);
+  if (!usernameLower) return null;
+  return accountsDb.users[usernameLower] || null;
+}
+
+function readJsonBody(req, maxBytes = 1024 * 512) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', chunk => {
+      total += chunk.length;
+      if (total > maxBytes) {
+        req.destroy();
+        reject(new Error('Body too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve(text ? JSON.parse(text) : {});
+      } catch (e) {
+        reject(new Error('Invalid JSON'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sanitizeHistoryList(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter(x => x && typeof x === 'object' && (x.imdbId || x.id))
+    .slice(0, 60)
+    .map(x => ({
+      id: x.id || x.imdbId,
+      imdbId: String(x.imdbId || x.id),
+      kpId: x.kpId ? String(x.kpId) : '',
+      title: String(x.title || 'Без названия').slice(0, 160),
+      originalTitle: String(x.originalTitle || '').slice(0, 160),
+      type: String(x.type || 'movie'),
+      year: Number(x.year) || 2024,
+      yearRange: x.yearRange ? String(x.yearRange) : '',
+      ratingKp: x.ratingKp ?? null,
+      ratingImdb: x.ratingImdb ?? null,
+      poster: String(x.poster || '').slice(0, 500),
+      backdrop: String(x.backdrop || '').slice(0, 500),
+      genres: Array.isArray(x.genres) ? x.genres.slice(0, 5) : ['Кино'],
+      voices: Array.isArray(x.voices) ? x.voices.slice(0, 12) : ['Рус. Дублированный'],
+      description: String(x.description || '').slice(0, 800),
+      season: Number(x.season) || 1,
+      episode: Number(x.episode) || 1,
+      voice: String(x.voice || 'Рус. Дублированный').slice(0, 80),
+      quality: String(x.quality || 'Авто (Макс. 1080p)').slice(0, 50),
+      currentTime: Math.max(0, Math.floor(Number(x.currentTime) || 0)),
+      durationSeconds: Math.max(0, Math.floor(Number(x.durationSeconds) || 0)),
+      updatedAt: Number(x.updatedAt) || Date.now()
+    }));
+}
+
+function mergeHistoryLists(serverList = [], clientList = []) {
+  const byId = new Map();
+  for (const item of [...sanitizeHistoryList(serverList), ...sanitizeHistoryList(clientList)]) {
+    const existing = byId.get(item.imdbId);
+    if (!existing || (item.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      byId.set(item.imdbId, item);
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 40);
+}
+
+function sanitizeFavoritesList(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const x of list) {
+    if (!x || typeof x !== 'object' || !(x.imdbId || x.id)) continue;
+    const imdbId = String(x.imdbId || x.id);
+    if (seen.has(imdbId)) continue;
+    seen.add(imdbId);
+    out.push({
+      id: x.id || imdbId,
+      imdbId,
+      kpId: x.kpId ? String(x.kpId) : '',
+      title: String(x.title || 'Без названия').slice(0, 160),
+      originalTitle: String(x.originalTitle || '').slice(0, 160),
+      type: String(x.type || 'movie'),
+      year: Number(x.year) || 2024,
+      yearRange: x.yearRange ? String(x.yearRange) : '',
+      ratingKp: x.ratingKp ?? null,
+      ratingImdb: x.ratingImdb ?? null,
+      poster: String(x.poster || '').slice(0, 500),
+      backdrop: String(x.backdrop || '').slice(0, 500),
+      genres: Array.isArray(x.genres) ? x.genres.slice(0, 5) : ['Кино'],
+      voices: Array.isArray(x.voices) ? x.voices.slice(0, 12) : ['Рус. Дублированный'],
+      description: String(x.description || '').slice(0, 800)
+    });
+    if (out.length >= 80) break;
+  }
+  return out;
+}
+
+function mergeFavoritesLists(serverList = [], clientList = []) {
+  return sanitizeFavoritesList([...(clientList || []), ...(serverList || [])]);
+}
+
+function publicUserPayload(user) {
+  return {
+    username: user.username,
+    history: user.history || [],
+    favorites: user.favorites || [],
+    updatedAt: user.updatedAt || Date.now()
+  };
+}
+
+function setAuthCookie(res, token) {
+  const maxAge = 90 * 24 * 60 * 60;
+  res.setHeader('Set-Cookie', `spbguka_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax`);
+}
+
 const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = parsedUrl.pathname;
 
   if (pathname === '/health') {
     return sendJson(res, 200, { status: 'ok', service: 'spbguka' });
+  }
+
+  // --- Auth & Account Sync Routes ---
+  if (pathname === '/api/auth/register' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const rawUsername = String(body.username || '').trim();
+      const password = String(body.password || '');
+      if (rawUsername.length < 2 || rawUsername.length > 32) {
+        return sendJson(res, 400, { error: 'Никнейм должен быть от 2 до 32 символов' }, req);
+      }
+      if (password.length < 4 || password.length > 100) {
+        return sendJson(res, 400, { error: 'Пароль должен быть не короче 4 символов' }, req);
+      }
+      const key = rawUsername.toLowerCase();
+      if (accountsDb.users[key]) {
+        return sendJson(res, 409, { error: 'Этот никнейм уже занят. Выберите другой или войдите.' }, req);
+      }
+      const now = Date.now();
+      const user = {
+        username: rawUsername,
+        usernameLower: key,
+        passwordHash: hashPassword(password),
+        createdAt: now,
+        updatedAt: now,
+        history: sanitizeHistoryList(body.history || []),
+        favorites: sanitizeFavoritesList(body.favorites || [])
+      };
+      accountsDb.users[key] = user;
+      scheduleSaveAccounts(true);
+      const token = signAuthToken(key);
+      setAuthCookie(res, token);
+      return sendJson(res, 201, { token, user: publicUserPayload(user) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Некорректные данные регистрации' }, req);
+    }
+  }
+
+  if (pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      const body = await readJsonBody(req);
+      const rawUsername = String(body.username || '').trim();
+      const password = String(body.password || '');
+      const key = rawUsername.toLowerCase();
+      const user = accountsDb.users[key];
+      if (!user || !verifyPassword(password, user.passwordHash)) {
+        return sendJson(res, 401, { error: 'Неверный никнейм или пароль' }, req);
+      }
+      if (Array.isArray(body.history) && body.history.length > 0) {
+        user.history = mergeHistoryLists(user.history, body.history);
+      }
+      if (Array.isArray(body.favorites) && body.favorites.length > 0) {
+        user.favorites = mergeFavoritesLists(user.favorites, body.favorites);
+      }
+      user.updatedAt = Date.now();
+      scheduleSaveAccounts(true);
+      const token = signAuthToken(key);
+      setAuthCookie(res, token);
+      return sendJson(res, 200, { token, user: publicUserPayload(user) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка входа' }, req);
+    }
+  }
+
+  if (pathname === '/api/auth/logout' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', 'spbguka_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+    return sendJson(res, 200, { ok: true }, req);
+  }
+
+  if ((pathname === '/api/auth/me' || pathname === '/api/account/sync') && req.method === 'GET') {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    }
+    return sendJson(res, 200, { user: publicUserPayload(user) }, req);
+  }
+
+  if (pathname === '/api/account/sync' && req.method === 'POST') {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    }
+    try {
+      const body = await readJsonBody(req);
+      const mode = body.mode === 'replace' ? 'replace' : 'merge';
+      if (Array.isArray(body.history)) {
+        user.history = mode === 'replace'
+          ? sanitizeHistoryList(body.history)
+          : mergeHistoryLists(user.history, body.history);
+      }
+      if (Array.isArray(body.favorites)) {
+        user.favorites = mode === 'replace'
+          ? sanitizeFavoritesList(body.favorites)
+          : mergeFavoritesLists(user.favorites, body.favorites);
+      }
+      user.updatedAt = Date.now();
+      scheduleSaveAccounts(false);
+      return sendJson(res, 200, { ok: true, user: publicUserPayload(user) }, req);
+    } catch (e) {
+      return sendJson(res, 400, { error: 'Ошибка синхронизации' }, req);
+    }
   }
 
   if (pathname === '/api/hls-proxy') {
