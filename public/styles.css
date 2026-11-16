@@ -288,7 +288,8 @@ body.pseudo-fullscreen-open {
   flex-shrink: 0;
 }
 
-.status-pill {
+.status-pill,
+.install-pill {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -303,7 +304,8 @@ body.pseudo-fullscreen-open {
   transition: border-color 0.15s, color 0.15s;
 }
 
-.status-pill:hover {
+.status-pill:hover,
+.install-pill:hover {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
@@ -2297,6 +2299,63 @@ body.pseudo-fullscreen-open {
   color: var(--text-muted);
 }
 
+/* Install / Apps Modal */
+.install-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.install-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 13px;
+}
+
+.install-card .p-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  font-size: 0.86rem;
+}
+
+.install-card p {
+  font-size: 0.77rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  flex: 1;
+}
+
+.install-card code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.71rem;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.install-btn-sm {
+  width: 100%;
+  justify-content: center;
+  padding: 8px 12px;
+  font-size: 0.79rem;
+  text-decoration: none;
+  text-align: center;
+}
+
+.account-install-divider {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
 /* Account & Sync Modal */
 .auth-mode-tabs {
   margin-bottom: 14px;
@@ -2474,7 +2533,8 @@ body.pseudo-fullscreen-open {
   #sidebarToggle,
   .brand-tag,
   .search-kbd,
-  #parsersStatusBtn {
+  #parsersStatusBtn,
+  #installAppBtn {
     display: none;
   }
   .account-pill {
@@ -2633,7 +2693,8 @@ body.pseudo-fullscreen-open {
   .meta-row {
     grid-template-columns: 110px 1fr;
   }
-  .parser-cards-grid {
+  .parser-cards-grid,
+  .install-cards-grid {
     grid-template-columns: 1fr;
   }
   .video-smart-overlay {
@@ -2714,6 +2775,7 @@ html.tv-mode .overlay-120-group,
 html.tv-mode .custom-video-bar,
 html.tv-mode .video-center-play,
 html.tv-mode .vc-btn,
+html.tv-mode .install-pill,
 html.tv-mode .btn-primary {
   transition: none !important;
 }

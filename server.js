@@ -1330,7 +1330,9 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.ipk': 'application/octet-stream',
+  '.sh': 'text/x-shellscript; charset=utf-8'
 };
 
 // --- Account & Cross-Device Progress Sync Storage ---
@@ -2072,33 +2074,33 @@ const server = http.createServer(async (req, res) => {
     }
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const baseHeaders = {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-store, no-cache, must-revalidate'
+    };
+    if (pathname.startsWith('/downloads/')) {
+      baseHeaders['Content-Disposition'] = `attachment; filename="${path.basename(filePath)}"`;
+    }
     const compressible = ['.html', '.css', '.js', '.json', '.svg'].includes(ext);
     const acceptEnc = (req.headers['accept-encoding'] || '').toLowerCase();
 
     if (compressible && acceptEnc.includes('gzip') && content.length > 256) {
       zlib.gzip(content, (gzErr, gzBuf) => {
         if (gzErr) {
-          res.writeHead(200, {
-            'Content-Type': contentType,
-            'Cache-Control': 'no-store, no-cache, must-revalidate'
-          });
+          res.writeHead(200, baseHeaders);
           return res.end(content);
         }
         res.writeHead(200, {
-          'Content-Type': contentType,
+          ...baseHeaders,
           'Content-Encoding': 'gzip',
-          'Vary': 'Accept-Encoding',
-          'Cache-Control': 'no-store, no-cache, must-revalidate'
+          'Vary': 'Accept-Encoding'
         });
         res.end(gzBuf);
       });
       return;
     }
 
-    res.writeHead(200, {
-      'Content-Type': contentType,
-      'Cache-Control': 'no-store, no-cache, must-revalidate'
-    });
+    res.writeHead(200, baseHeaders);
     res.end(content);
   });
 });

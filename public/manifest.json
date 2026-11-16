@@ -1,18 +1,39 @@
 {
+  "id": "/",
   "name": "СПБГУКА — Кино и Сериалы",
   "short_name": "СПБГУКА",
-  "description": "Фильмы, сериалы, мультфильмы и аниме без рекламы с выбором любой озвучки",
+  "description": "Фильмы, сериалы, мультфильмы и аниме без рекламы с синхронизацией профиля",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#09090b",
-  "theme_color": "#09090b",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#07080c",
+  "theme_color": "#07080c",
   "orientation": "any",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%2309090b'/%3E%3Crect x='12' y='12' width='168' height='168' rx='32' fill='%2318191f' stroke='%23e11d48' stroke-width='6'/%3E%3Cpath d='M76 58v76l58-38z' fill='%23ffffff'/%3E%3C/svg%3E",
+      "src": "/icons/icon-192.png",
       "sizes": "192x192",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

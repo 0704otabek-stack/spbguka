@@ -537,6 +537,15 @@ const parsersModal = document.getElementById('parsersModal');
 const parsersStatusBtn = document.getElementById('parsersStatusBtn');
 const closeParsersModalBtn = document.getElementById('closeParsersModalBtn');
 
+// Install / Apps Modal Elements
+const installAppBtn = document.getElementById('installAppBtn');
+const openInstallFromSidebarBtn = document.getElementById('openInstallFromSidebarBtn');
+const openInstallFromAccountBtn = document.getElementById('openInstallFromAccountBtn');
+const installModal = document.getElementById('installModal');
+const closeInstallModalBtn = document.getElementById('closeInstallModalBtn');
+const pwaInstallActionBtn = document.getElementById('pwaInstallActionBtn');
+const pwaInstallHint = document.getElementById('pwaInstallHint');
+
 // Account & Sync Elements
 const accountBtn = document.getElementById('accountBtn');
 const accountDot = document.getElementById('accountDot');
@@ -2088,6 +2097,8 @@ function getVisibleFocusableWithRects() {
   let scope = document.body;
   if (isVideoFullscreen()) {
     scope = directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : videoStageArea;
+  } else if (installModal && !installModal.classList.contains('hidden')) {
+    scope = installModal;
   } else if (accountModal && !accountModal.classList.contains('hidden')) {
     scope = accountModal;
   } else if (!parsersModal.classList.contains('hidden')) {
@@ -2652,6 +2663,12 @@ document.addEventListener('keydown', e => {
       exitVideoFullscreen();
       return;
     }
+    if (installModal && !installModal.classList.contains('hidden')) {
+      e.preventDefault();
+      e.stopPropagation();
+      installModal.classList.add('hidden');
+      return;
+    }
     if (accountModal && !accountModal.classList.contains('hidden')) {
       e.preventDefault();
       e.stopPropagation();
@@ -2889,6 +2906,88 @@ window.addEventListener('pagehide', () => {
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
 });
+
+// PWA Service Worker & App Install Prompts (Android / Desktop / iOS / LG webOS / Linux)
+let deferredInstallPrompt = null;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+function updateInstallPromptUI() {
+  if (!pwaInstallActionBtn) return;
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if (isStandalone) {
+    pwaInstallActionBtn.textContent = 'Приложение уже установлено';
+    pwaInstallActionBtn.disabled = true;
+    return;
+  }
+  if (deferredInstallPrompt) {
+    pwaInstallActionBtn.textContent = 'Установить на устройство';
+    pwaInstallActionBtn.disabled = false;
+    if (pwaInstallHint) {
+      pwaInstallHint.textContent = 'Нажмите кнопку ниже — система установит отдельное приложение СПБГУКА с иконкой на главный экран.';
+    }
+  } else {
+    pwaInstallActionBtn.textContent = 'Как установить в браузере';
+    pwaInstallActionBtn.disabled = false;
+  }
+}
+
+function openInstallModal() {
+  if (!installModal) return;
+  if (accountModal && !accountModal.classList.contains('hidden')) {
+    accountModal.classList.add('hidden');
+  }
+  updateInstallPromptUI();
+  installModal.classList.remove('hidden');
+}
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  updateInstallPromptUI();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  updateInstallPromptUI();
+  showPlayerOsd('Приложение СПБГУКА установлено');
+});
+
+if (installAppBtn) installAppBtn.addEventListener('click', openInstallModal);
+if (openInstallFromSidebarBtn) openInstallFromSidebarBtn.addEventListener('click', openInstallModal);
+if (openInstallFromAccountBtn) openInstallFromAccountBtn.addEventListener('click', openInstallModal);
+if (closeInstallModalBtn) {
+  closeInstallModalBtn.addEventListener('click', () => installModal.classList.add('hidden'));
+}
+if (installModal) {
+  installModal.addEventListener('click', e => {
+    if (e.target === installModal) installModal.classList.add('hidden');
+  });
+}
+if (pwaInstallActionBtn) {
+  pwaInstallActionBtn.addEventListener('click', async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      try {
+        await deferredInstallPrompt.userChoice;
+      } catch (e) {}
+      deferredInstallPrompt = null;
+      updateInstallPromptUI();
+      return;
+    }
+    const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if (pwaInstallHint) {
+      pwaInstallHint.textContent = isIos
+        ? 'На iPhone / iPad откройте этот сайт в Safari → кнопка «Поделиться» → «На экран «Домой»».'
+        : 'Откройте меню браузера (⋮ или ⋯ справа вверху) → «Установить приложение» / «Добавить на главный экран».';
+    }
+    showPlayerOsd(isIos ? 'Safari → Поделиться → На экран «Домой»' : 'Меню браузера (⋮) → Установить приложение');
+  });
+}
 
 // Clear TV focus highlight when user switches to mouse/touch
 document.addEventListener('pointerdown', clearTvFocus);

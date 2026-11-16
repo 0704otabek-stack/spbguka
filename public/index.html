@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="СПБГУКА" />
   <meta name="mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
   <title>СПБГУКА — Кино, сериалы и аниме без рекламы</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -19,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=12" />
+  <link rel="stylesheet" href="/styles.css?v=13" />
 </head>
 <body>
   <!-- Top Header -->
@@ -73,6 +74,14 @@
 
     <!-- Topbar Right Controls -->
     <div class="topbar-right">
+      <button id="installAppBtn" class="install-pill focusable" type="button" title="Установить приложение на телефон, ТВ или Linux">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <span>Приложения</span>
+      </button>
       <button id="parsersStatusBtn" class="status-pill focusable" type="button" title="Источники видеопотоков">
         <span class="status-dot"></span>
         <span>Прямой поток • Без рекламы</span>
@@ -177,6 +186,7 @@
             <span>Источники онлайн</span>
           </div>
           <p class="sources-desc">Collaps, Kinogram, HDRezka, VidSrc, IMDb, Wikidata RU</p>
+          <button id="openInstallFromSidebarBtn" class="btn-ghost install-btn-sm focusable" style="margin-top: 10px;" type="button">Приложения (ТВ / ПК / Телефон)</button>
         </div>
       </div>
     </aside>
@@ -758,10 +768,62 @@
             <button id="logoutBtn" class="btn-ghost focusable" type="button">Выйти</button>
           </div>
         </div>
+        <div class="account-install-divider">
+          <button id="openInstallFromAccountBtn" class="btn-ghost install-btn-sm focusable" type="button">Установить приложение (Android / iPhone / LG TV / Linux)</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="/app.js?v=15"></script>
+  <!-- Apps & Platforms Install Modal -->
+  <div id="installModal" class="modal-overlay hidden">
+    <div class="modal-window modal-sm">
+      <div class="modal-header">
+        <h2>Приложения и установка</h2>
+        <button id="closeInstallModalBtn" class="modal-close-btn focusable" type="button" aria-label="Закрыть">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="parsers-intro">
+          Все версии подключаются напрямую к этому серверу — ваш профиль, избранное и минута остановки автоматически синхронизируются между телефоном, ТВ и ПК.
+        </p>
+        <div class="install-cards-grid">
+          <div class="install-card">
+            <div>
+              <div class="p-head"><strong>LG webOS (Smart TV)</strong> <span class="badge-ok">.ipk</span></div>
+              <p>Готовый пакет <code>com.spbguka.tv</code> для телевизоров LG (установка через webOS Dev Manager или <code>ares-install</code>). Сразу открывает TV-интерфейс и общий профиль.</p>
+            </div>
+            <a href="/downloads/com.spbguka.tv_1.0.0_all.ipk" download="com.spbguka.tv_1.0.0_all.ipk" class="btn-primary install-btn-sm focusable">Скачать .ipk</a>
+          </div>
+          <div class="install-card">
+            <div>
+              <div class="p-head"><strong>Android / Chrome</strong> <span class="badge-ok">WebAPK</span></div>
+              <p id="pwaInstallHint">Устанавливается как отдельное приложение без браузерной рамки с иконкой на экране «Домой» и синхронизацией профиля.</p>
+            </div>
+            <button id="pwaInstallActionBtn" class="btn-primary install-btn-sm focusable" type="button">Установить на устройство</button>
+          </div>
+          <div class="install-card">
+            <div>
+              <div class="p-head"><strong>iPhone / iPad (iOS)</strong> <span class="badge-ok">Safari</span></div>
+              <p>Откройте сайт в <strong>Safari</strong>, нажмите «Поделиться» (квадрат со стрелкой вверх) → <strong>«На экран «Домой»»</strong>. Профиль синхронизируется с ПК и ТВ.</p>
+            </div>
+          </div>
+          <div class="install-card">
+            <div>
+              <div class="p-head"><strong>Linux (Desktop)</strong> <span class="badge-ok">.sh</span></div>
+              <p>Скрипт создаёт ярлык приложения <code>spbguka.desktop</code> и иконку в меню программ Linux. Запуск: <code>bash install-spbguka-linux.sh</code>.</p>
+            </div>
+            <a href="/downloads/install-spbguka-linux.sh" download="install-spbguka-linux.sh" class="btn-ghost install-btn-sm focusable">Скачать скрипт .sh</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=16"></script>
 </body>
 </html>

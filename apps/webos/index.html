@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>СПБГУКА — LG webOS</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #07080c;
+      color: #f4f6fb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .launcher {
+      width: 92%;
+      max-width: 680px;
+      background: #0e1017;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 20px;
+      padding: 36px;
+      text-align: center;
+    }
+    .logo-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .logo-badge {
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
+      background: #e11d48;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .title {
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .status {
+      font-size: 1.05rem;
+      color: #a3aab8;
+      margin-bottom: 24px;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid rgba(255, 255, 255, 0.14);
+      border-top-color: #e11d48;
+      border-radius: 50%;
+      margin: 0 auto 20px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .server-box {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .server-box.hidden { display: none; }
+    input {
+      width: 100%;
+      background: #07080c;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 1rem;
+      outline: none;
+    }
+    input:focus { border-color: #e11d48; }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #181b25;
+      color: #fff;
+      border: 2px solid rgba(255, 255, 255, 0.22);
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #e11d48;
+      border-color: #e11d48;
+    }
+    button:focus, button.focused {
+      outline: 3px solid #ffffff;
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="launcher">
+    <div class="logo-row">
+      <div class="logo-badge">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="#ffffff">
+          <path d="M7 5.5v13l11-6.5z"/>
+        </svg>
+      </div>
+      <div class="title">СПБГУКА TV</div>
+    </div>
+    <div id="spinner" class="spinner"></div>
+    <p id="statusText" class="status">Подключение к серверу профилей и каталога...</p>
+
+    <div id="errorBox" class="server-box hidden">
+      <input id="serverInput" type="url" placeholder="https://video-53li.onrender.com" />
+      <div class="btn-row">
+        <button id="retryBtn" class="primary" type="button">Подключиться</button>
+        <button id="resetBtn" type="button">Сервер по умолчанию</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var DEFAULT_SERVER = 'https://video-53li.onrender.com';
+      var STORAGE_KEY = 'spbguka_tv_server_url';
+      var statusText = document.getElementById('statusText');
+      var spinner = document.getElementById('spinner');
+      var errorBox = document.getElementById('errorBox');
+      var serverInput = document.getElementById('serverInput');
+      var retryBtn = document.getElementById('retryBtn');
+      var resetBtn = document.getElementById('resetBtn');
+
+      function getServerUrl() {
+        try {
+          var saved = localStorage.getItem(STORAGE_KEY);
+          if (saved && /^https?:\/\//i.test(saved)) return saved.replace(/\/+$/, '');
+        } catch (e) {}
+        return DEFAULT_SERVER;
+      }
+
+      function launchApp() {
+        var base = getServerUrl();
+        serverInput.value = base;
+        spinner.style.display = 'block';
+        errorBox.classList.add('hidden');
+        statusText.textContent = 'Запуск СПБГУКА (' + base + ')...';
+
+        var targetUrl = base + '/?tv=1';
+        var done = false;
+        var timer = setTimeout(function () {
+          if (!done) {
+            done = true;
+            window.location.replace(targetUrl);
+          }
+        }, 1200);
+
+        try {
+          fetch(base + '/health', { cache: 'no-store' }).then(function (r) {
+            if (!done && r.ok) {
+              done = true;
+              clearTimeout(timer);
+              window.location.replace(targetUrl);
+            }
+          }).catch(function () {
+            if (!done) {
+              done = true;
+              clearTimeout(timer);
+              window.location.replace(targetUrl);
+            }
+          });
+        } catch (e) {
+          window.location.replace(targetUrl);
+        }
+      }
+
+      retryBtn.addEventListener('click', function () {
+        var val = (serverInput.value || '').trim().replace(/\/+$/, '');
+        if (/^https?:\/\//i.test(val)) {
+          try { localStorage.setItem(STORAGE_KEY, val); } catch (e) {}
+        }
+        launchApp();
+      });
+
+      resetBtn.addEventListener('click', function () {
+        try { localStorage.setItem(STORAGE_KEY, DEFAULT_SERVER); } catch (e) {}
+        serverInput.value = DEFAULT_SERVER;
+        launchApp();
+      });
+
+      document.addEventListener('webOSRelaunch', launchApp);
+      launchApp();
+    })();
+  </script>
+</body>
+</html>
