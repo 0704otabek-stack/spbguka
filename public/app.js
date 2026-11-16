@@ -454,6 +454,23 @@ const profileFavoritesCount = document.getElementById('profileFavoritesCount');
 const syncNowBtn = document.getElementById('syncNowBtn');
 const logoutBtn = document.getElementById('logoutBtn');
 
+// Fresh Releases Shelf
+const newReleasesShelf = document.getElementById('newReleasesShelf');
+const newReleasesList = document.getElementById('newReleasesList');
+const newReleasesTitle = document.getElementById('newReleasesTitle');
+const newReleasesUpdated = document.getElementById('newReleasesUpdated');
+const allNewReleasesBtn = document.getElementById('allNewReleasesBtn');
+let catalogUpdatedAt = 0;
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const CATEGORY_TITLES = {
   all: 'Весь каталог',
   popular: 'Популярное сейчас',
@@ -773,7 +790,7 @@ function renderHeroBanner(items) {
 
   const bgUrl = featured.backdrop || featured.poster;
   heroBackdrop.style.backgroundImage = `url("${bgUrl}")`;
-  heroBadge.textContent = TYPE_LABELS[featured.type] || 'В фокусе';
+  heroBadge.textContent = `${featured.isNew ? 'Новинка · ' : ''}${TYPE_LABELS[featured.type] || 'В фокусе'}`;
   heroKp.textContent = `КП ${featured.ratingKp || '8.5'}`;
   heroImdb.textContent = `IMDb ${featured.ratingImdb || '8.6'}`;
   heroYear.textContent = featured.yearRange || featured.year || '2024';
@@ -854,6 +871,7 @@ async function loadCatalog() {
         const res = await fetch('/api/catalog?category=all&sort=popular');
         const data = await res.json();
         state.masterCatalog = data.items || [];
+        catalogUpdatedAt = Number(data.updatedAt) || 0;
       } catch (e) {
         state.masterCatalog = [];
       }
@@ -863,7 +881,65 @@ async function loadCatalog() {
 
   loadingState.classList.add('hidden');
   renderHeroBanner(state.catalogItems);
+  renderNewReleasesShelf();
   renderCatalogGrid(state.catalogItems);
+}
+
+function renderNewReleasesShelf() {
+  if (!newReleasesShelf || !newReleasesList) return;
+  const show = state.category === 'all' &&
+    !state.searchQuery.trim() &&
+    state.genre === 'all' &&
+    state.year === 'all' &&
+    Array.isArray(state.masterCatalog);
+
+  const fresh = show
+    ? state.masterCatalog
+        .filter(x => x.isNew)
+        .sort((a, b) => ((b.year || 0) - (a.year || 0)) || ((b.ratingImdb || 0) - (a.ratingImdb || 0)))
+        .slice(0, 14)
+    : [];
+
+  if (fresh.length < 3) {
+    newReleasesShelf.classList.add('hidden');
+    return;
+  }
+
+  const thisYear = new Date().getFullYear();
+  if (newReleasesTitle) newReleasesTitle.textContent = `Новинки ${thisYear - 1}–${thisYear}`;
+  if (newReleasesUpdated) {
+    newReleasesUpdated.textContent = catalogUpdatedAt
+      ? `обновлено ${new Date(catalogUpdatedAt).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+      : '';
+  }
+
+  newReleasesList.innerHTML = '';
+  for (const item of fresh) {
+    const card = document.createElement('article');
+    card.className = 'release-card focusable';
+    card.tabIndex = 0;
+    const typeLabel = TYPE_LABELS[item.type] || 'Кино';
+    const genre = (item.genres || [])[0] || '';
+    card.innerHTML = `
+      <div class="release-poster-wrap">
+        <img
+          src="${escapeHtml(item.poster)}"
+          alt="${escapeHtml(item.title)}"
+          class="release-poster"
+          loading="lazy"
+          decoding="async"
+          onerror="this.src='https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=400&q=70'"
+        />
+        <span class="release-year">${escapeHtml(item.year || '')}</span>
+        ${item.ratingImdb ? `<span class="r-badge imdb release-rating">${escapeHtml(item.ratingImdb)}</span>` : ''}
+      </div>
+      <div class="release-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
+      <div class="release-sub">${escapeHtml(typeLabel)}${genre ? ` • ${escapeHtml(genre)}` : ''}</div>
+    `;
+    card.addEventListener('click', () => openItemModal(item, 'player'));
+    newReleasesList.appendChild(card);
+  }
+  newReleasesShelf.classList.remove('hidden');
 }
 
 function renderCatalogGrid(items) {
@@ -921,6 +997,7 @@ function renderCatalogGrid(items) {
         ${progressPct > 0
           ? `<div class="card-progress-bar"><div class="card-progress-fill" style="width:${progressPct}%"></div></div>`
           : ''}
+        ${item.isNew ? '<span class="card-new-pill">Новинка</span>' : ''}
       </div>
       <div class="card-body">
         <h3 class="card-title" title="${item.title}">${item.title}</h3>
@@ -2288,6 +2365,21 @@ if (accountBtn) {
 
 if (closeAccountModalBtn) {
   closeAccountModalBtn.addEventListener('click', () => accountModal.classList.add('hidden'));
+}
+
+if (allNewReleasesBtn) {
+  allNewReleasesBtn.addEventListener('click', () => {
+    state.category = 'new';
+    state.searchQuery = '';
+    searchInput.value = '';
+    clearSearchBtn.classList.add('hidden');
+    syncCategoryButtons('new');
+    loadCatalog();
+    document.querySelector('.section-header')?.scrollIntoView({
+      behavior: isSmartTv ? 'auto' : 'smooth',
+      block: 'start'
+    });
+  });
 }
 
 if (accountModal) {

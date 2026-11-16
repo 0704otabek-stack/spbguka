@@ -19,7 +19,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=10" />
+  <link rel="stylesheet" href="/styles.css?v=11" />
 </head>
 <body>
   <!-- Top Header -->
@@ -77,7 +77,7 @@
         <span class="status-dot"></span>
         <span>Прямой поток • Без рекламы</span>
       </button>
-      <button id="accountBtn" class="account-pill focusable" type="button" title="Аккаунт и синхронизация устройств">
+      <button id="accountBtn" class="account-pill focusable" type="button" title="Аккаунт и синхронизация устройств" aria-label="Аккаунт">
         <span id="accountDot" class="account-dot hidden"></span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
@@ -226,6 +226,19 @@
           <button id="clearHistoryBtn" class="btn-ghost btn-xs focusable" type="button">Очистить</button>
         </div>
         <div id="continueCardsList" class="continue-cards-list"></div>
+      </section>
+
+      <!-- Fresh Releases Shelf (auto-updated daily at 10:00) -->
+      <section id="newReleasesShelf" class="releases-shelf hidden">
+        <div class="continue-shelf-head">
+          <div class="continue-shelf-title">
+            <span class="continue-dot releases-dot"></span>
+            <h2 id="newReleasesTitle">Новинки</h2>
+            <span id="newReleasesUpdated" class="shelf-updated"></span>
+          </div>
+          <button id="allNewReleasesBtn" class="btn-ghost btn-xs focusable" type="button">Все новинки →</button>
+        </div>
+        <div id="newReleasesList" class="releases-list"></div>
       </section>
 
       <!-- Filter Strip -->
@@ -683,6 +696,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=10"></script>
+  <script src="/app.js?v=11"></script>
 </body>
 </html>

@@ -712,6 +712,112 @@ body {
   color: #fff;
 }
 
+/* Fresh Releases Shelf */
+.releases-shelf {
+  margin-bottom: 24px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.releases-dot {
+  background: var(--imdb);
+  box-shadow: 0 0 8px rgba(245, 197, 24, 0.55);
+}
+
+.shelf-updated {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.releases-list {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding: 2px 2px 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.releases-list::-webkit-scrollbar {
+  display: none;
+}
+
+.release-card {
+  flex: 0 0 150px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  scroll-snap-align: start;
+  border-radius: 12px;
+}
+
+.release-poster-wrap {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 7px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.release-card:hover .release-poster-wrap {
+  border-color: rgba(244, 63, 94, 0.5);
+  transform: translateY(-3px);
+}
+
+.release-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.release-year {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-size: 0.66rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 5px;
+  letter-spacing: 0.03em;
+}
+
+.release-rating {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+}
+
+.release-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.release-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Filter Bar */
 .filter-bar {
   display: flex;
@@ -790,9 +896,21 @@ body {
 }
 
 .section-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+.section-header h1::before {
+  content: '';
+  width: 4px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--brand-gradient);
+  flex-shrink: 0;
 }
 
 .section-subtitle {
@@ -989,6 +1107,22 @@ body {
 .card-progress-fill {
   height: 100%;
   background: linear-gradient(90deg, #fb7185, #e11d48);
+}
+
+.card-new-pill {
+  position: absolute;
+  left: 8px;
+  bottom: 10px;
+  z-index: 4;
+  background: var(--brand-gradient);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 5px;
+  pointer-events: none;
 }
 
 .card-body {
@@ -2152,9 +2286,30 @@ body {
     display: none;
   }
   .account-pill {
-    padding: 6px 10px;
-    font-size: 0.76rem;
-    max-width: 106px;
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    max-width: none;
+    flex-shrink: 0;
+  }
+  #accountBtnLabel {
+    display: none;
+  }
+  .account-dot {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+  }
+  .release-card {
+    flex-basis: 118px;
+  }
+  .releases-list {
+    gap: 10px;
+  }
+  .shelf-updated {
+    display: none;
   }
   .sidebar {
     display: none !important;
@@ -2341,16 +2496,23 @@ html.tv-mode .card-play-hover,
 html.tv-mode .play-circle,
 html.tv-mode .hero-backdrop,
 html.tv-mode .continue-card,
+html.tv-mode .release-poster-wrap,
 html.tv-mode .modal-window,
 html.tv-mode .overlay-120-group,
 html.tv-mode .btn-primary {
   transition: none !important;
 }
 
+html.tv-mode .release-poster-wrap,
+html.tv-mode .releases-dot {
+  box-shadow: none !important;
+}
+
 html.tv-mode .movie-card:hover,
 html.tv-mode .movie-card:hover .card-poster,
 html.tv-mode .hero-banner:hover .hero-backdrop,
 html.tv-mode .continue-card:hover,
+html.tv-mode .release-card:hover .release-poster-wrap,
 html.tv-mode .btn-primary:hover {
   transform: none !important;
 }
