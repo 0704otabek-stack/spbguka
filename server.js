@@ -593,6 +593,15 @@ const wikiCache = new Map();
 const detailsCache = new Map();
 
 function getMirrorList(preferredMirror = 'direct') {
+  if (preferredMirror === 'kinokino') {
+    return [
+      'https://kinokino.vip',
+      'https://api.namy.ws',
+      'https://api.kinogram.best',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
+    ];
+  }
   if (preferredMirror === 'namy') {
     return [
       'https://api.namy.ws',
@@ -717,6 +726,25 @@ function extractAudioFromBlock(mkBlock) {
   return normalizeAudioTracks(names, order);
 }
 
+function extractSubtitlesFromBlock(mkBlock) {
+  try {
+    const ccKey = mkBlock.match(/["']?cc["']?\s*:/);
+    if (ccKey) {
+      const arrStr = extractJsonArray(mkBlock, ccKey.index + ccKey[0].length);
+      if (arrStr) {
+        const parsed = JSON.parse(arrStr);
+        if (Array.isArray(parsed)) {
+          return parsed.map(c => ({
+            name: c.name || 'Русские субтитры',
+            url: c.url ? `/api/hls-proxy?url=${encodeURIComponent(c.url)}` : ''
+          })).filter(c => c.url);
+        }
+      }
+    }
+  } catch (e) {}
+  return [];
+}
+
 // Parse real HLS streams, seasons, episodes, and Russian studio voiceover tracks from Namy / Kinogram / Embess / Delivembd balancers
 async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
   const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
@@ -827,7 +855,7 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
                   rawHls: signedHls,
                   voices,
                   voiceTracks,
-                  subtitles: []
+                  subtitles: extractSubtitlesFromBlock(mkBlock)
                 }
               ]
             }
@@ -1112,7 +1140,8 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct', 
     { id: 'direct', name: 'СПБГУКА Direct HLS (Чистый поток • 0% рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' },
     { id: 'namy', name: 'Collaps HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '110 Мбит/с' },
     { id: 'kinogram', name: 'Kinogram HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '105 Мбит/с' },
-    { id: 'delivembd', name: 'Delivembed HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '98 Мбит/с' }
+    { id: 'delivembd', name: 'Delivembed HLS Mirror (Прямой поток без рекламы)', badge: '1080p FHD', speed: '98 Мбит/с' },
+    { id: 'kinokino', name: 'Kinokino (kinokino.vip / Кинопоиск)', badge: '1080p / Embed', speed: '100 Мбит/с' }
   ];
 
   const qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
@@ -2800,6 +2829,31 @@ const server = http.createServer(async (req, res) => {
     const fast = parsedUrl.searchParams.get('fast') === '1';
     const details = await handleDetails(imdb, title, mirror, fast);
     return sendJson(res, 200, details, req);
+  }
+
+  if (pathname === '/api/actor') {
+    const actorName = (parsedUrl.searchParams.get('name') || '').trim();
+    if (!actorName) {
+      return sendJson(res, 400, { error: 'Missing name' }, req);
+    }
+    const qLower = actorName.toLowerCase();
+    const items = liveCatalog.filter(x => (x.cast || '').toLowerCase().includes(qLower));
+    return sendJson(res, 200, { actor: actorName, items, total: items.length }, req);
+  }
+
+  if (pathname === '/api/download-stream') {
+    const streamUrl = parsedUrl.searchParams.get('url') || '';
+    const title = parsedUrl.searchParams.get('title') || 'video';
+    if (!streamUrl) {
+      res.writeHead(400);
+      return res.end('Missing stream url');
+    }
+    const safeFilename = encodeURIComponent(title.replace(/[^\w\dа-яА-ЯёЁ\s._-]/g, '_')) + '.m3u8';
+    res.writeHead(302, {
+      'Location': streamUrl,
+      'Content-Disposition': `attachment; filename="${safeFilename}"`
+    });
+    return res.end();
   }
 
   // Static files from ./public (with Gzip compression for text assets)

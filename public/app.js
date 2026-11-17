@@ -23,6 +23,8 @@ const state = {
   selectedVoice: 'Рус. Дублированный',
   preferredVoice: '',
   selectedQuality: 'Авто (Макс. 1080p)',
+  selectedSubtitleTrack: -1,
+  availableSubtitles: [],
   selectedSeason: 1,
   selectedEpisode: 1
 };
@@ -57,6 +59,15 @@ let lastAccountPullTs = 0;
 const clientStreamCache = new Map();
 
 function getClientMirrorList(preferredMirror = 'direct') {
+  if (preferredMirror === 'kinokino') {
+    return [
+      'https://kinokino.vip',
+      'https://api.namy.ws',
+      'https://api.kinogram.best',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
+    ];
+  }
   if (preferredMirror === 'namy') {
     return [
       'https://api.namy.ws',
@@ -224,7 +235,10 @@ async function probeClientMirror(mirror, paths) {
                 rawHls: signedHls,
                 voices: epVoices,
                 voiceTracks,
-                subtitles: (ep.cc || []).map(c => ({ name: c.name, url: c.url }))
+                subtitles: (ep.cc || []).map(c => ({
+                  name: c.name,
+                  url: `/api/hls-proxy?url=${encodeURIComponent(c.url)}`
+                }))
               });
             }
           }
@@ -489,7 +503,10 @@ const playerOsd = document.getElementById('playerOsd');
 const directPlayerWrap = document.getElementById('directPlayerWrap');
 const videoStageArea = document.getElementById('videoStageArea');
 const html5Video = document.getElementById('html5Video');
+const videoCenterControls = document.getElementById('videoCenterControls');
+const videoCenterPrevEpBtn = document.getElementById('videoCenterPrevEpBtn');
 const videoCenterPlayBtn = document.getElementById('videoCenterPlayBtn');
+const videoCenterNextEpBtn = document.getElementById('videoCenterNextEpBtn');
 const vcCenterPlayIcon = document.getElementById('vcCenterPlayIcon');
 const vcCenterPauseIcon = document.getElementById('vcCenterPauseIcon');
 const customVideoBar = document.getElementById('customVideoBar');
@@ -506,6 +523,19 @@ const vcMuteIcon = document.getElementById('vcMuteIcon');
 const vcVolumeRange = document.getElementById('vcVolumeRange');
 const vcVolUpBtn = document.getElementById('vcVolUpBtn');
 const videoTimeText = document.getElementById('videoTimeText');
+const vcMoreBtn = document.getElementById('vcMoreBtn');
+const vcMoreMenu = document.getElementById('vcMoreMenu');
+const vcMoreCloseBtn = document.getElementById('vcMoreCloseBtn');
+const vcSpeedChips = document.getElementById('vcSpeedChips');
+const vcMenuCurrentSpeed = document.getElementById('vcMenuCurrentSpeed');
+const vcQualityChips = document.getElementById('vcQualityChips');
+const vcMenuCurrentQuality = document.getElementById('vcMenuCurrentQuality');
+const vcAudioChips = document.getElementById('vcAudioChips');
+const vcMenuCurrentAudio = document.getElementById('vcMenuCurrentAudio');
+const vcSubChips = document.getElementById('vcSubChips');
+const vcMenuCurrentSub = document.getElementById('vcMenuCurrentSub');
+const vcDownloadBtn = document.getElementById('vcDownloadBtn');
+const vcDownloadInfo = document.getElementById('vcDownloadInfo');
 const vcFullscreenBtn = document.getElementById('vcFullscreenBtn');
 const vcFsEnterIcon = document.getElementById('vcFsEnterIcon');
 const vcFsExitIcon = document.getElementById('vcFsExitIcon');
@@ -521,6 +551,16 @@ const overlayForward120Btn = document.getElementById('overlayForward120Btn');
 const overlayNextEpBtn = document.getElementById('overlayNextEpBtn');
 const overlayNextEpText = document.getElementById('overlayNextEpText');
 const nowPlayingText = document.getElementById('nowPlayingText');
+
+// Actor Profile Modal Elements
+const actorModal = document.getElementById('actorModal');
+const actorModalBackdrop = document.getElementById('actorModalBackdrop');
+const closeActorModalBtn = document.getElementById('closeActorModalBtn');
+const actorAvatarInitials = document.getElementById('actorAvatarInitials');
+const actorNameTitle = document.getElementById('actorNameTitle');
+const actorFilmCount = document.getElementById('actorFilmCount');
+const actorSearchInCatalogBtn = document.getElementById('actorSearchInCatalogBtn');
+const actorFilmographyGrid = document.getElementById('actorFilmographyGrid');
 const restartVideoBtn = document.getElementById('restartVideoBtn');
 const rewind120Btn = document.getElementById('rewind120Btn');
 const skip120Btn = document.getElementById('skip120Btn');
@@ -2128,7 +2168,24 @@ function populateInfoTab(item) {
   infoGenres.textContent = (item.genres || ['Кино']).join(', ');
   infoDuration.textContent = item.duration || '120 мин';
   infoDirector.textContent = item.director || 'Не указан';
-  infoCast.textContent = item.cast || 'Не указан';
+  if (item.cast) {
+    infoCast.innerHTML = '';
+    const actors = item.cast.split(',').map(a => a.trim()).filter(Boolean);
+    actors.forEach(actor => {
+      const btn = document.createElement('button');
+      btn.className = 'actor-tag-btn focusable';
+      btn.type = 'button';
+      btn.textContent = actor;
+      btn.title = `Профиль и фильмы с актёром ${actor}`;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openActorProfile(actor);
+      });
+      infoCast.appendChild(btn);
+    });
+  } else {
+    infoCast.textContent = 'Не указан';
+  }
   infoIds.textContent = `IMDb: ${item.imdbId || '—'} • KP: ${item.kpId || '—'}`;
   infoDescription.textContent = item.description || 'Описание отсутствует.';
 
@@ -2227,6 +2284,7 @@ function populatePlayerControls(item) {
 
   // Voices
   voiceSelector.innerHTML = '';
+  if (vcAudioChips) vcAudioChips.innerHTML = '';
   for (const voice of voices) {
     const btn = document.createElement('button');
     btn.className = `chip-btn focusable ${state.selectedVoice === voice ? 'active' : ''}`;
@@ -2240,16 +2298,36 @@ function populatePlayerControls(item) {
       showPlayerOsd(`Озвучка: ${voice}`);
     });
     voiceSelector.appendChild(btn);
+
+    if (vcAudioChips) {
+      const chip = document.createElement('button');
+      chip.className = `vc-menu-chip focusable ${state.selectedVoice === voice ? 'active' : ''}`;
+      chip.type = 'button';
+      chip.textContent = voice;
+      chip.addEventListener('click', () => {
+        state.preferredVoice = voice;
+        state.selectedVoice = voice;
+        populatePlayerControls(item);
+        switchAudioTrackOrRestart(voice);
+        showPlayerOsd(`Озвучка / Аудио: ${voice}`);
+      });
+      vcAudioChips.appendChild(chip);
+    }
+  }
+  if (vcMenuCurrentAudio) {
+    vcMenuCurrentAudio.textContent = state.selectedVoice || 'По умолчанию';
   }
 
   // Qualities
   qualitySelector.innerHTML = '';
+  if (vcQualityChips) vcQualityChips.innerHTML = '';
   const qualities = item.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
   for (const q of qualities) {
     const btn = document.createElement('button');
     btn.className = `chip-btn focusable ${state.selectedQuality === q ? 'active' : ''}`;
     btn.type = 'button';
-    btn.textContent = q.replace('Авто (Макс. 1080p)', 'Авто').replace(' FHD', '').replace(' HD', '').replace(' SD', '');
+    const shortQ = q.replace('Авто (Макс. 1080p)', 'Авто').replace(' FHD', '').replace(' HD', '').replace(' SD', '');
+    btn.textContent = shortQ;
     btn.addEventListener('click', () => {
       state.selectedQuality = q;
       populatePlayerControls(item);
@@ -2257,6 +2335,23 @@ function populatePlayerControls(item) {
       showPlayerOsd(`Качество: ${q}`);
     });
     qualitySelector.appendChild(btn);
+
+    if (vcQualityChips) {
+      const chip = document.createElement('button');
+      chip.className = `vc-menu-chip focusable ${state.selectedQuality === q ? 'active' : ''}`;
+      chip.type = 'button';
+      chip.textContent = shortQ;
+      chip.addEventListener('click', () => {
+        state.selectedQuality = q;
+        populatePlayerControls(item);
+        switchQualityLevel(q);
+        showPlayerOsd(`Качество: ${q}`);
+      });
+      vcQualityChips.appendChild(chip);
+    }
+  }
+  if (vcMenuCurrentQuality) {
+    vcMenuCurrentQuality.textContent = (state.selectedQuality || 'Авто').replace('Авто (Макс. 1080p)', 'Авто').replace(' FHD', '');
   }
 
   // Seasons & Episodes
@@ -2333,6 +2428,7 @@ function populatePlayerControls(item) {
     if (episodesCountBadge) episodesCountBadge.textContent = '';
     seriesPickerBox.classList.add('hidden');
   }
+  updateVideoCenterControls();
 }
 
 function populateFilesTab(item) {
@@ -2565,23 +2661,214 @@ function getAdjacentEpisodeTarget(delta) {
 }
 
 function updateSmartVideoOverlay() {
-  if (!overlay120Group || !overlayNextEpBtn) return;
+  if (!overlay120Group) return;
   const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
   const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
   const isFirstHalf = (dur === 0) || (cur <= dur * 0.5);
 
-  const remaining = dur > 0 ? (dur - cur) : Infinity;
-  const nextTarget = getAdjacentEpisodeTarget(1);
-  const showNextEp = !isFirstHalf && dur > 0 && remaining <= 180 && Boolean(nextTarget);
-  const key = `${isFirstHalf ? 1 : 0}|${showNextEp ? 1 : 0}|${nextTarget ? `${nextTarget.season}:${nextTarget.episode}` : ''}`;
+  const key = `${isFirstHalf ? 1 : 0}`;
   if (key === lastSmartOverlayKey) return;
   lastSmartOverlayKey = key;
 
   overlay120Group.classList.toggle('hidden', !isFirstHalf);
-  overlayNextEpBtn.classList.toggle('hidden', !showNextEp);
-  if (showNextEp && overlayNextEpText && nextTarget) {
-    overlayNextEpText.textContent = `Следующая серия (С${nextTarget.season} Е${nextTarget.episode}) ⏭`;
+  if (overlayNextEpBtn) {
+    overlayNextEpBtn.classList.add('hidden');
   }
+}
+
+function updateVideoCenterControls() {
+  if (!videoCenterControls) return;
+  const item = state.currentItem;
+  const seasonsObj = item?.seasons || {};
+  const seasonNums = Object.keys(seasonsObj).map(Number).sort((a, b) => a - b);
+  const isMultiEpisode = Boolean(item && (item.type === 'series' || item.type === 'anime' || item.type === 'cartoon' || seasonNums.length > 1 || (seasonsObj[1] && seasonsObj[1].length > 1)));
+
+  const prevTarget = getAdjacentEpisodeTarget(-1);
+  const nextTarget = getAdjacentEpisodeTarget(1);
+
+  if (videoCenterPrevEpBtn) {
+    videoCenterPrevEpBtn.classList.toggle('hidden', !isMultiEpisode);
+    videoCenterPrevEpBtn.disabled = !prevTarget;
+    videoCenterPrevEpBtn.classList.toggle('disabled', !prevTarget);
+  }
+  if (videoCenterNextEpBtn) {
+    videoCenterNextEpBtn.classList.toggle('hidden', !isMultiEpisode);
+    videoCenterNextEpBtn.disabled = !nextTarget;
+    videoCenterNextEpBtn.classList.toggle('disabled', !nextTarget);
+  }
+}
+
+function setupSubtitles(activeEp) {
+  if (!html5Video) return;
+  const oldTracks = html5Video.querySelectorAll('track');
+  oldTracks.forEach(t => t.remove());
+
+  const subTracks = [];
+
+  if (activeEp?.subtitles && Array.isArray(activeEp.subtitles)) {
+    activeEp.subtitles.forEach((s, idx) => {
+      if (!s.url) return;
+      const trackEl = document.createElement('track');
+      trackEl.kind = 'subtitles';
+      trackEl.label = s.name || `Субтитры ${idx + 1}`;
+      trackEl.srclang = s.lang || 'ru';
+      const proxiedUrl = s.url.startsWith('/') ? s.url : `/api/hls-proxy?url=${encodeURIComponent(s.url)}`;
+      trackEl.src = proxiedUrl;
+      html5Video.appendChild(trackEl);
+      subTracks.push({ id: idx, name: s.name || `Субтитры ${idx + 1}`, source: 'track' });
+    });
+  }
+
+  if (hlsInstance && hlsInstance.subtitleTracks && hlsInstance.subtitleTracks.length > 0) {
+    hlsInstance.subtitleTracks.forEach((st, idx) => {
+      const name = st.name || st.lang || `Субтитры ${idx + 1}`;
+      subTracks.push({ id: idx, name, source: 'hls' });
+    });
+  }
+
+  state.availableSubtitles = subTracks;
+  renderSubtitleMenu(subTracks);
+}
+
+function renderSubtitleMenu(subTracks) {
+  if (!vcSubChips) return;
+  vcSubChips.innerHTML = '';
+
+  const offChip = document.createElement('button');
+  offChip.className = `vc-menu-chip focusable ${state.selectedSubtitleTrack === -1 ? 'active' : ''}`;
+  offChip.type = 'button';
+  offChip.dataset.sub = '-1';
+  offChip.textContent = 'Выкл';
+  offChip.addEventListener('click', () => switchSubtitleTrack({ id: -1, name: 'Выкл' }));
+  vcSubChips.appendChild(offChip);
+
+  subTracks.forEach(st => {
+    const chip = document.createElement('button');
+    chip.className = `vc-menu-chip focusable ${state.selectedSubtitleTrack === st.id ? 'active' : ''}`;
+    chip.type = 'button';
+    chip.dataset.sub = String(st.id);
+    chip.textContent = st.name;
+    chip.addEventListener('click', () => switchSubtitleTrack(st));
+    vcSubChips.appendChild(chip);
+  });
+
+  if (vcMenuCurrentSub) {
+    const activeTrack = subTracks.find(t => t.id === state.selectedSubtitleTrack);
+    vcMenuCurrentSub.textContent = activeTrack ? activeTrack.name : 'Выкл';
+  }
+}
+
+function switchSubtitleTrack(subObj) {
+  if (!subObj || subObj.id === -1) {
+    state.selectedSubtitleTrack = -1;
+    if (hlsInstance) hlsInstance.subtitleTrack = -1;
+    if (html5Video && html5Video.textTracks) {
+      Array.from(html5Video.textTracks).forEach(t => { t.mode = 'disabled'; });
+    }
+    if (vcMenuCurrentSub) vcMenuCurrentSub.textContent = 'Выкл';
+    showPlayerOsd('Субтитры: Выкл');
+  } else {
+    state.selectedSubtitleTrack = subObj.id;
+    if (subObj.source === 'hls' && hlsInstance) {
+      hlsInstance.subtitleTrack = subObj.id;
+    } else if (html5Video && html5Video.textTracks) {
+      Array.from(html5Video.textTracks).forEach((t, i) => {
+        t.mode = (i === subObj.id) ? 'showing' : 'disabled';
+      });
+    }
+    if (vcMenuCurrentSub) vcMenuCurrentSub.textContent = subObj.name;
+    showPlayerOsd(`Субтитры: ${subObj.name}`);
+  }
+
+  if (vcSubChips) {
+    vcSubChips.querySelectorAll('.vc-menu-chip').forEach(c => {
+      c.classList.toggle('active', Number(c.dataset.sub) === (subObj ? subObj.id : -1));
+    });
+  }
+}
+
+function toggleVcMoreMenu() {
+  if (!vcMoreMenu) return;
+  const isHidden = vcMoreMenu.classList.contains('hidden');
+  vcMoreMenu.classList.toggle('hidden', !isHidden);
+  if (isHidden) {
+    revealVideoOverlayControls(30000);
+    const firstFocusable = vcMoreMenu.querySelector('.focusable');
+    if (firstFocusable && isSmartTv) firstFocusable.focus();
+  }
+}
+
+async function openActorProfile(actorName) {
+  if (!actorModal) return;
+  const trimmedName = (actorName || '').trim();
+  if (!trimmedName) return;
+
+  if (actorNameTitle) actorNameTitle.textContent = trimmedName;
+  if (actorAvatarInitials) {
+    const parts = trimmedName.split(/\s+/).filter(Boolean);
+    const inits = parts.map(p => p[0]).join('').slice(0, 2).toUpperCase();
+    actorAvatarInitials.textContent = inits || 'АК';
+  }
+
+  const qLower = trimmedName.toLowerCase();
+  let matches = (state.catalogItems || []).filter(it => (it.cast || '').toLowerCase().includes(qLower));
+
+  if (matches.length < 2) {
+    try {
+      const res = await fetch(`/api/actor?name=${encodeURIComponent(trimmedName)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.items && Array.isArray(data.items)) {
+          const map = new Map(matches.map(m => [m.imdbId || m.id, m]));
+          data.items.forEach(it => map.set(it.imdbId || it.id, it));
+          matches = Array.from(map.values());
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (actorFilmCount) {
+    const count = matches.length;
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    const word = (mod10 === 1 && mod100 !== 11) ? 'фильм/сериал' : (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'фильма' : 'фильмов');
+    actorFilmCount.textContent = count > 0 ? `${count} ${word}` : 'Пока нет в каталоге';
+  }
+
+  if (actorFilmographyGrid) {
+    actorFilmographyGrid.innerHTML = '';
+    if (matches.length === 0) {
+      actorFilmographyGrid.innerHTML = '<div style="grid-column: 1 / -1; padding: 20px; text-align: center; color: var(--text-muted);">Фильмы с этим актёром загружаются. Нажмите «Найти в поиске» для глобального поиска.</div>';
+    } else {
+      matches.forEach(m => {
+        const card = document.createElement('div');
+        card.className = 'actor-film-card focusable';
+        card.innerHTML = `
+          <img class="actor-film-poster" src="${m.poster || ''}" alt="${m.title}" loading="lazy" />
+          <div class="actor-film-info">
+            <span class="actor-film-title" title="${m.title}">${m.title}</span>
+            <div class="actor-film-meta">
+              <span>${m.year || ''} • ${m.type === 'series' ? 'Сериал' : 'Фильм'}</span>
+              <span class="actor-film-rating">★ ${m.ratingKp || m.ratingImdb || ''}</span>
+            </div>
+          </div>
+        `;
+        card.addEventListener('click', () => {
+          closeActorProfile();
+          openItemModal(m);
+        });
+        actorFilmographyGrid.appendChild(card);
+      });
+    }
+  }
+
+  actorModal.classList.remove('hidden');
+  const firstFocus = actorModal.querySelector('.focusable');
+  if (firstFocus && isSmartTv) firstFocus.focus();
+}
+
+function closeActorProfile() {
+  if (actorModal) actorModal.classList.add('hidden');
 }
 
 function hideVideoOverlayControls() {
@@ -2781,6 +3068,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     balancerIframe.removeAttribute('srcdoc');
     balancerIframe.src = 'about:blank';
     directPlayerWrap.classList.remove('hidden');
+    setupSubtitles(activeEp);
 
     // Prefer hls.js on PC, Linux, Android, webOS Chromium
     if (window.Hls && window.Hls.isSupported()) {
@@ -2816,10 +3104,12 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
       activeHls.on(window.Hls.Events.MANIFEST_PARSED, () => {
         applyDesiredAudioTrack(activeHls);
         switchQualityLevel(state.selectedQuality);
+        setupSubtitles(activeEp);
         finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
       });
 
       activeHls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => applyDesiredAudioTrack(activeHls));
+      activeHls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, () => setupSubtitles(activeEp));
       activeHls.on(window.Hls.Events.LEVEL_SWITCHED, () => applyDesiredAudioTrack(activeHls));
       return;
     }
@@ -2832,11 +3122,35 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
 
       currentLoadedHlsUrl = nativeUrl;
       html5Video.src = nativeUrl;
+      setupSubtitles(activeEp);
       html5Video.addEventListener('loadedmetadata', () => {
         finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
       }, { once: true });
       return;
     }
+  }
+
+  // Kinokino.vip embed source (Kinopoisk mirror)
+  if (state.selectedBalancer === 'kinokino') {
+    destroyHls();
+    html5Video.pause();
+    html5Video.removeAttribute('src');
+    directPlayerWrap.classList.add('hidden');
+    iframePlayerWrap.classList.remove('hidden');
+    kinoboxContainer.classList.add('hidden');
+    balancerIframe.classList.remove('hidden');
+    applyIframeSandbox();
+
+    const kpId = item.kpId || (item.id && /^\d+$/.test(item.id) ? item.id : '');
+    const isSeries = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+    const query = isSeries ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
+    const embedUrl = kpId
+      ? `https://kinokino.vip/embed/kp/${kpId}${query}`
+      : `https://kinokino.vip/embed/imdb/${item.imdbId}${query}`;
+    balancerIframe.removeAttribute('srcdoc');
+    balancerIframe.src = embedUrl;
+    showPlayerOsd('Источник kinokino.vip загружен');
+    return;
   }
 
   // Fallback: Client-side ad-stripped embed or Custom Stream
@@ -2853,6 +3167,19 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
   if (state.selectedBalancer === 'custom') {
     const customUrl = customStreamInput.value.trim();
     if (!customUrl) return;
+
+    // Check if user entered a kinopoisk or kinokino link, or KP id
+    const kpMatch = customUrl.match(/(?:kinopoisk\.ru\/(?:film|series)\/|kinokino\.vip\/embed\/kp\/)(\d+)/i) || customUrl.match(/^(\d{3,9})$/);
+    if (kpMatch) {
+      const kpId = kpMatch[1];
+      const isSeries = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+      const query = isSeries ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
+      balancerIframe.removeAttribute('srcdoc');
+      balancerIframe.src = `https://kinokino.vip/embed/kp/${kpId}${query}`;
+      showPlayerOsd(`Загружен источник kinokino.vip (KP #${kpId})`);
+      return;
+    }
+
     if (customUrl.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
       iframePlayerWrap.classList.add('hidden');
       directPlayerWrap.classList.remove('hidden');
@@ -3139,8 +3466,10 @@ function pickInitialTvFocus(candidates, direction) {
     const preferred = [
       vcPlayPauseBtn,
       videoCenterPlayBtn,
-      overlayNextEpBtn,
+      videoCenterNextEpBtn,
+      videoCenterPrevEpBtn,
       overlayForward120Btn,
+      vcMoreBtn,
       vcFullscreenBtn
     ];
     for (const target of preferred) {
@@ -3431,7 +3760,34 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
   });
 });
 
-applyCustomStreamBtn.addEventListener('click', () => startPlayback(0, true));
+applyCustomStreamBtn.addEventListener('click', () => {
+  const customUrl = customStreamInput.value.trim();
+  if (!customUrl) return;
+
+  const kpMatch = customUrl.match(/(?:kinopoisk\.ru\/(?:film|series)\/|kinokino\.vip\/embed\/kp\/)(\d+)/i) || customUrl.match(/^(\d{3,9})$/);
+  if (kpMatch) {
+    const kpId = kpMatch[1];
+    state.selectedBalancer = 'kinokino';
+    updateBalancerButtons();
+    destroyHls();
+    html5Video.pause();
+    html5Video.removeAttribute('src');
+    directPlayerWrap.classList.add('hidden');
+    iframePlayerWrap.classList.remove('hidden');
+    kinoboxContainer.classList.add('hidden');
+    balancerIframe.classList.remove('hidden');
+    applyIframeSandbox();
+    const isSeries = state.currentItem && (state.currentItem.type === 'series' || state.currentItem.type === 'anime' || state.currentItem.type === 'cartoon');
+    const query = isSeries ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
+    balancerIframe.removeAttribute('srcdoc');
+    balancerIframe.src = `https://kinokino.vip/embed/kp/${kpId}${query}`;
+    showPlayerOsd(`Загружен источник kinokino.vip (KP #${kpId})`);
+    return;
+  }
+
+  startPlayback(0, true);
+});
+
 sandboxToggle.addEventListener('change', () => {
   applyIframeSandbox();
   if (!isDirectHlsBalancer(state.selectedBalancer)) startPlayback(0, true);
@@ -3458,6 +3814,13 @@ function switchEpisodeStep(delta, osdPrefix = '') {
 prevEpBtn.addEventListener('click', () => switchEpisodeStep(-1));
 nextEpBtn.addEventListener('click', () => switchEpisodeStep(1));
 
+if (videoCenterPrevEpBtn) {
+  videoCenterPrevEpBtn.addEventListener('click', () => switchEpisodeStep(-1, 'Предыдущая серия'));
+}
+if (videoCenterNextEpBtn) {
+  videoCenterNextEpBtn.addEventListener('click', () => switchEpisodeStep(1, 'Следующая серия'));
+}
+
 if (overlayForward120Btn) {
   overlayForward120Btn.addEventListener('click', () => seekRelative(120));
 }
@@ -3470,8 +3833,92 @@ if (skip120Btn) {
 if (rewind120Btn) {
   rewind120Btn.addEventListener('click', () => seekRelative(-120));
 }
-if (overlayNextEpBtn) {
-  overlayNextEpBtn.addEventListener('click', () => switchEpisodeStep(1, 'Следующая серия'));
+
+// Three-Dots ("...") Player Settings Menu Event Handlers
+if (vcMoreBtn) {
+  vcMoreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleVcMoreMenu();
+  });
+}
+if (vcMoreCloseBtn) {
+  vcMoreCloseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (vcMoreMenu) vcMoreMenu.classList.add('hidden');
+  });
+}
+document.addEventListener('click', (e) => {
+  if (vcMoreMenu && !vcMoreMenu.classList.contains('hidden')) {
+    if (!vcMoreMenu.contains(e.target) && !vcMoreBtn?.contains(e.target)) {
+      vcMoreMenu.classList.add('hidden');
+    }
+  }
+});
+if (vcSpeedChips) {
+  vcSpeedChips.querySelectorAll('.vc-menu-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const spd = parseFloat(chip.dataset.speed);
+      if (html5Video && Number.isFinite(spd)) {
+        html5Video.playbackRate = spd;
+        vcSpeedChips.querySelectorAll('.vc-menu-chip').forEach(c => c.classList.toggle('active', c === chip));
+        if (vcMenuCurrentSpeed) vcMenuCurrentSpeed.textContent = `${spd}x`;
+        if (playbackSpeedSelect) playbackSpeedSelect.value = String(spd);
+        showPlayerOsd(`Скорость: ${spd}x`);
+      }
+    });
+  });
+}
+if (vcDownloadBtn) {
+  vcDownloadBtn.addEventListener('click', () => {
+    const item = state.currentItem;
+    if (!item) return;
+    const activeEp = getActiveEpisodeObj(item);
+    const streamUrl = activeEp?.rawHls || activeEp?.hlsUrl || (html5Video && html5Video.src ? html5Video.src : '');
+    const title = `${item.title}${item.type === 'series' ? `_S${state.selectedSeason}E${state.selectedEpisode}` : ''}`;
+    if (!streamUrl) {
+      showPlayerOsd('Ссылка на поток не найдена');
+      return;
+    }
+    const downloadUrl = `/api/download-stream?url=${encodeURIComponent(streamUrl)}&title=${encodeURIComponent(title)}`;
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `${title}.m3u8`;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(streamUrl).catch(() => {});
+    }
+    if (vcDownloadInfo) {
+      vcDownloadInfo.textContent = 'Файл загружается. Ссылка на поток скопирована в буфер.';
+      vcDownloadInfo.classList.remove('hidden');
+    }
+    showPlayerOsd('📥 Загрузка видео запущена');
+  });
+}
+
+// Actor Profile Modal Listeners
+if (closeActorModalBtn) {
+  closeActorModalBtn.addEventListener('click', closeActorProfile);
+}
+if (actorModalBackdrop) {
+  actorModalBackdrop.addEventListener('click', closeActorProfile);
+}
+if (actorSearchInCatalogBtn) {
+  actorSearchInCatalogBtn.addEventListener('click', () => {
+    const actor = actorNameTitle?.textContent || '';
+    closeActorProfile();
+    closeItemModal();
+    if (searchInput) {
+      searchInput.value = actor;
+      state.searchQuery = actor;
+      state.category = 'all';
+      syncCategoryButtons('all');
+      loadCatalog();
+      searchInput.focus();
+    }
+  });
 }
 
 playbackSpeedSelect.addEventListener('change', e => {
