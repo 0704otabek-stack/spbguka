@@ -194,8 +194,8 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
   const mirrors = getMirrorList(preferredMirror);
 
   const paths = [];
-  if (kpId) paths.push(`/embed/kp/${kpId}`);
   if (imdbId) paths.push(`/embed/imdb/${imdbId}`);
+  if (kpId) paths.push(`/embed/kp/${kpId}`);
 
   for (const mirror of mirrors) {
     for (const p of paths) {
@@ -742,8 +742,8 @@ async function handleEmbedClean(req, res, parsedUrl) {
     ? `?season=${encodeURIComponent(season)}&episode=${encodeURIComponent(episode)}`
     : '';
   const paths = [];
-  if (kp) paths.push(`/embed/kp/${encodeURIComponent(kp)}${query}`);
   if (imdb) paths.push(`/embed/imdb/${encodeURIComponent(imdb)}${query}`);
+  if (kp) paths.push(`/embed/kp/${encodeURIComponent(kp)}${query}`);
 
   for (const mirror of mirrors) {
     for (const p of paths) {
@@ -1569,16 +1569,33 @@ function readJsonBody(req, maxBytes = 1024 * 512) {
   });
 }
 
+const SEED_KP_BY_IMDB = new Map(SEED_CATALOG.map(x => [x.imdbId, x.kpId ? String(x.kpId) : '']));
+
+function resolveCanonicalIds(rawId, rawImdbId, rawKpId, rawTitle = '') {
+  let imdbId = String(rawImdbId || rawId || '').trim();
+  let id = String(rawId || imdbId || '').trim();
+  if (imdbId === 'tt1321510' && /джентльмен|gentlemen/i.test(String(rawTitle || ''))) {
+    imdbId = 'tt13210838';
+    if (id === 'tt1321510') id = 'tt13210838';
+  }
+  const kpId = SEED_KP_BY_IMDB.has(imdbId)
+    ? SEED_KP_BY_IMDB.get(imdbId)
+    : (rawKpId ? String(rawKpId).slice(0, 32) : '');
+  return { id, imdbId, kpId };
+}
+
 function sanitizeHistoryList(list) {
   if (!Array.isArray(list)) return [];
   return list
     .filter(x => x && typeof x === 'object' && (x.imdbId || x.id))
     .slice(0, 60)
-    .map(x => ({
-      id: x.id || x.imdbId,
-      imdbId: String(x.imdbId || x.id),
-      kpId: x.kpId ? String(x.kpId) : '',
-      title: String(x.title || 'Без названия').slice(0, 160),
+    .map(x => {
+      const ids = resolveCanonicalIds(x.id, x.imdbId, x.kpId, x.title);
+      return {
+        id: ids.id || ids.imdbId,
+        imdbId: ids.imdbId,
+        kpId: ids.kpId,
+        title: String(x.title || 'Без названия').slice(0, 160),
       originalTitle: String(x.originalTitle || '').slice(0, 160),
       type: String(x.type || 'movie'),
       year: Number(x.year) || 2024,
@@ -1597,7 +1614,8 @@ function sanitizeHistoryList(list) {
       currentTime: Math.max(0, Math.floor(Number(x.currentTime) || 0)),
       durationSeconds: Math.max(0, Math.floor(Number(x.durationSeconds) || 0)),
       updatedAt: Number(x.updatedAt) || Date.now()
-    }));
+      };
+    });
 }
 
 function mergeHistoryLists(serverList = [], clientList = []) {
@@ -1620,12 +1638,13 @@ function sanitizeFavoritesList(list) {
   for (const x of list) {
     if (!x || typeof x !== 'object' || !(x.imdbId || x.id)) continue;
     const imdbId = String(x.imdbId || x.id);
-    if (seen.has(imdbId)) continue;
-    seen.add(imdbId);
+    const ids = resolveCanonicalIds(x.id, imdbId, x.kpId, x.title);
+    if (seen.has(ids.imdbId)) continue;
+    seen.add(ids.imdbId);
     out.push({
-      id: x.id || imdbId,
-      imdbId,
-      kpId: x.kpId ? String(x.kpId) : '',
+      id: ids.id || ids.imdbId,
+      imdbId: ids.imdbId,
+      kpId: ids.kpId,
       title: String(x.title || 'Без названия').slice(0, 160),
       originalTitle: String(x.originalTitle || '').slice(0, 160),
       type: String(x.type || 'movie'),
@@ -1776,11 +1795,11 @@ function schedulePresenceBroadcast() {
 
 function sanitizeLobbyMediaItem(raw) {
   if (!raw || typeof raw !== 'object' || !(raw.imdbId || raw.id)) return null;
-  const imdbId = String(raw.imdbId || raw.id).slice(0, 64);
+  const ids = resolveCanonicalIds(raw.id, raw.imdbId, raw.kpId, raw.title);
   return {
-    id: imdbId,
-    imdbId,
-    kpId: raw.kpId ? String(raw.kpId).slice(0, 32) : '',
+    id: ids.imdbId.slice(0, 64),
+    imdbId: ids.imdbId.slice(0, 64),
+    kpId: ids.kpId,
     title: String(raw.title || 'Без названия').slice(0, 160),
     originalTitle: String(raw.originalTitle || '').slice(0, 160),
     type: String(raw.type || 'movie').slice(0, 20),

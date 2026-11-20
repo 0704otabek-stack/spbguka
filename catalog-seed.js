@@ -175,9 +175,9 @@ export const SEED_CATALOG = [
     description: 'Талантливый выпускник Оксфорда, применив уникальный ум и невиданную дерзость, придумал нелегальную схему обогащения с использованием поместья обедневшей английской аристократии.'
   },
   {
-    id: 'tt1321510',
-    imdbId: 'tt1321510',
-    kpId: '502838',
+    id: 'tt13210838',
+    imdbId: 'tt13210838',
+    kpId: '1435343',
     title: 'Джентльмены (Сериал)',
     originalTitle: 'The Gentlemen (TV Series)',
     type: 'series',
@@ -227,7 +227,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt12637874',
     imdbId: 'tt12637874',
-    kpId: '1392550',
+    kpId: '1394131',
     title: 'Фоллаут',
     originalTitle: 'Fallout',
     type: 'series',
@@ -252,7 +252,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt6263850',
     imdbId: 'tt6263850',
-    kpId: '1229684',
+    kpId: '1008444',
     title: 'Дэдпул и Росомаха',
     originalTitle: 'Deadpool & Wolverine',
     type: 'movie',
@@ -374,7 +374,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt12343534',
     imdbId: 'tt12343534',
-    kpId: '1382226',
+    kpId: '1381125',
     title: 'Магическая битва',
     originalTitle: 'Jujutsu Kaisen',
     type: 'anime',
@@ -473,7 +473,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt10919420',
     imdbId: 'tt10919420',
-    kpId: '1309325',
+    kpId: '1301710',
     title: 'Игра в кальмара',
     originalTitle: 'Squid Game',
     type: 'series',
@@ -574,7 +574,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt12299608',
     imdbId: 'tt12299608',
-    kpId: '1405626',
+    kpId: '1320476',
     title: 'Микки 17',
     originalTitle: 'Mickey 17',
     type: 'movie',
@@ -597,7 +597,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt31193180',
     imdbId: 'tt31193180',
-    kpId: '5447145',
+    kpId: '5499518',
     title: 'Грешники',
     originalTitle: 'Sinners',
     type: 'movie',
@@ -620,7 +620,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt16311594',
     imdbId: 'tt16311594',
-    kpId: '4745480',
+    kpId: '5003510',
     title: 'Формула-1',
     originalTitle: 'F1',
     type: 'movie',
@@ -643,7 +643,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt5950044',
     imdbId: 'tt5950044',
-    kpId: '5245184',
+    kpId: '997647',
     title: 'Супермен',
     originalTitle: 'Superman',
     type: 'movie',
@@ -666,7 +666,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt10676052',
     imdbId: 'tt10676052',
-    kpId: '4542177',
+    kpId: '1287545',
     title: 'Фантастическая четвёрка: Первые шаги',
     originalTitle: 'The Fantastic Four: First Steps',
     type: 'movie',
@@ -689,7 +689,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt20969586',
     imdbId: 'tt20969586',
-    kpId: '5025792',
+    kpId: '5001443',
     title: 'Громовержцы*',
     originalTitle: 'Thunderbolts*',
     type: 'movie',
@@ -712,7 +712,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt10548174',
     imdbId: 'tt10548174',
-    kpId: '5447141',
+    kpId: '5445182',
     title: '28 лет спустя',
     originalTitle: '28 Years Later',
     type: 'movie',
@@ -735,7 +735,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt9603208',
     imdbId: 'tt9603208',
-    kpId: '1228661',
+    kpId: '1229683',
     title: 'Миссия невыполнима: Финальная расплата',
     originalTitle: 'Mission: Impossible - The Final Reckoning',
     type: 'movie',
@@ -758,7 +758,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt26743210',
     imdbId: 'tt26743210',
-    kpId: '5257253',
+    kpId: '5267432',
     title: 'Как приручить дракона',
     originalTitle: 'How to Train Your Dragon',
     type: 'movie',
@@ -781,7 +781,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt31036941',
     imdbId: 'tt31036941',
-    kpId: '5447148',
+    kpId: '5450952',
     title: 'Мир Юрского периода: Возрождение',
     originalTitle: 'Jurassic World Rebirth',
     type: 'movie',
@@ -804,7 +804,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt28607951',
     imdbId: 'tt28607951',
-    kpId: '5364101',
+    kpId: '5405057',
     title: 'Анора',
     originalTitle: 'Anora',
     type: 'movie',
@@ -827,7 +827,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt17526714',
     imdbId: 'tt17526714',
-    kpId: '4851116',
+    kpId: '4860213',
     title: 'Субстанция',
     originalTitle: 'The Substance',
     type: 'movie',
@@ -850,7 +850,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt9218128',
     imdbId: 'tt9218128',
-    kpId: '1209523',
+    kpId: '1207839',
     title: 'Гладиатор 2',
     originalTitle: 'Gladiator II',
     type: 'movie',
@@ -873,7 +873,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt5040012',
     imdbId: 'tt5040012',
-    kpId: '1009537',
+    kpId: '1048253',
     title: 'Носферату',
     originalTitle: 'Nosferatu',
     type: 'movie',
@@ -896,7 +896,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt8999762',
     imdbId: 'tt8999762',
-    kpId: '1235262',
+    kpId: '1405331',
     title: 'Бруталист',
     originalTitle: 'The Brutalist',
     type: 'movie',
@@ -919,7 +919,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt20215234',
     imdbId: 'tt20215234',
-    kpId: '5025614',
+    kpId: '4987361',
     title: 'Конклав',
     originalTitle: 'Conclave',
     type: 'movie',
@@ -942,7 +942,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt29623480',
     imdbId: 'tt29623480',
-    kpId: '5395343',
+    kpId: '5457899',
     title: 'Дикий робот',
     originalTitle: 'The Wild Robot',
     type: 'cartoon',
@@ -965,7 +965,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt22022452',
     imdbId: 'tt22022452',
-    kpId: '4728446',
+    kpId: '5102255',
     title: 'Головоломка 2',
     originalTitle: 'Inside Out 2',
     type: 'cartoon',
@@ -988,7 +988,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt12037194',
     imdbId: 'tt12037194',
-    kpId: '1395367',
+    kpId: '1388409',
     title: 'Фуриоса: Хроники Безумного Макса',
     originalTitle: 'Furiosa: A Mad Max Saga',
     type: 'movie',
@@ -1011,7 +1011,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt18412256',
     imdbId: 'tt18412256',
-    kpId: '4902263',
+    kpId: '4887347',
     title: 'Чужой: Ромул',
     originalTitle: 'Alien: Romulus',
     type: 'movie',
@@ -1034,7 +1034,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt26446278',
     imdbId: 'tt26446278',
-    kpId: '5267761',
+    kpId: '5452393',
     title: 'Граф Монте-Кристо',
     originalTitle: 'Le Comte de Monte-Cristo',
     type: 'movie',
@@ -1057,7 +1057,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt18259086',
     imdbId: 'tt18259086',
-    kpId: '4909349',
+    kpId: '4865694',
     title: 'Соник 3',
     originalTitle: 'Sonic the Hedgehog 3',
     type: 'movie',
@@ -1107,7 +1107,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt15435876',
     imdbId: 'tt15435876',
-    kpId: '4664642',
+    kpId: '4635062',
     title: 'Пингвин',
     originalTitle: 'The Penguin',
     type: 'series',
@@ -1132,7 +1132,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt2788316',
     imdbId: 'tt2788316',
-    kpId: '421593',
+    kpId: '',
     title: 'Сёгун',
     originalTitle: 'Shōgun',
     type: 'series',
@@ -1157,7 +1157,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt3581920',
     imdbId: 'tt3581920',
-    kpId: '1355059',
+    kpId: '839458',
     title: 'Одни из нас',
     originalTitle: 'The Last of Us',
     type: 'series',
@@ -1182,7 +1182,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt31806037',
     imdbId: 'tt31806037',
-    kpId: '5496177',
+    kpId: '6559163',
     title: 'Переходный возраст',
     originalTitle: 'Adolescence',
     type: 'series',
@@ -1207,7 +1207,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt14688458',
     imdbId: 'tt14688458',
-    kpId: '4450712',
+    kpId: '4541515',
     title: 'Укрытие',
     originalTitle: 'Silo',
     type: 'series',
@@ -1232,7 +1232,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt13016388',
     imdbId: 'tt13016388',
-    kpId: '1405641',
+    kpId: '4693201',
     title: 'Задача трёх тел',
     originalTitle: '3 Body Problem',
     type: 'series',
@@ -1282,7 +1282,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt14452776',
     imdbId: 'tt14452776',
-    kpId: '4547315',
+    kpId: '4481731',
     title: 'Медведь',
     originalTitle: 'The Bear',
     type: 'series',
@@ -1357,7 +1357,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt24053860',
     imdbId: 'tt24053860',
-    kpId: '5245112',
+    kpId: '5461927',
     title: 'День Шакала',
     originalTitle: 'The Day of the Jackal',
     type: 'series',
@@ -1382,7 +1382,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt31938062',
     imdbId: 'tt31938062',
-    kpId: '5502982',
+    kpId: '6589776',
     title: 'Больница Питт',
     originalTitle: 'The Pitt',
     type: 'series',
@@ -1407,7 +1407,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt9253284',
     imdbId: 'tt9253284',
-    kpId: '1209527',
+    kpId: '1209850',
     title: 'Андор',
     originalTitle: 'Andor',
     type: 'series',
@@ -1432,7 +1432,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt18923754',
     imdbId: 'tt18923754',
-    kpId: '4969738',
+    kpId: '',
     title: 'Сорвиголова: Рождённый заново',
     originalTitle: 'Daredevil: Born Again',
     type: 'series',
@@ -1457,7 +1457,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt13406094',
     imdbId: 'tt13406094',
-    kpId: '4309612',
+    kpId: '2000461',
     title: 'Белый лотос',
     originalTitle: 'The White Lotus',
     type: 'series',
@@ -1484,7 +1484,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt21209876',
     imdbId: 'tt21209876',
-    kpId: '5047471',
+    kpId: '',
     title: 'Поднятие уровня в одиночку',
     originalTitle: 'Solo Leveling',
     type: 'anime',
@@ -1510,7 +1510,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt22248376',
     imdbId: 'tt22248376',
-    kpId: '5105858',
+    kpId: '5401195',
     title: 'Провожающая в последний путь Фрирен',
     originalTitle: 'Sousou no Frieren',
     type: 'anime',
@@ -1536,7 +1536,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt30217403',
     imdbId: 'tt30217403',
-    kpId: '5444256',
+    kpId: '5458831',
     title: 'Дандадан',
     originalTitle: 'Dan Da Dan',
     type: 'anime',
@@ -1562,7 +1562,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt21975436',
     imdbId: 'tt21975436',
-    kpId: '5081613',
+    kpId: '5233576',
     title: 'Кайдзю №8',
     originalTitle: 'Kaiju No. 8',
     type: 'anime',
@@ -1588,7 +1588,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt13616990',
     imdbId: 'tt13616990',
-    kpId: '4309480',
+    kpId: '2040161',
     title: 'Человек-бензопила',
     originalTitle: 'Chainsaw Man',
     type: 'anime',
@@ -1614,7 +1614,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt9335498',
     imdbId: 'tt9335498',
-    kpId: '1252447',
+    kpId: '1220920',
     title: 'Клинок, рассекающий демонов',
     originalTitle: 'Kimetsu no Yaiba',
     type: 'anime',
@@ -1640,7 +1640,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt0388629',
     imdbId: 'tt0388629',
-    kpId: '401152',
+    kpId: '382731',
     title: 'Ван-Пис',
     originalTitle: 'One Piece',
     type: 'anime',
@@ -1666,7 +1666,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt0988824',
     imdbId: 'tt0988824',
-    kpId: '401177',
+    kpId: '281884',
     title: 'Наруто: Ураганные хроники',
     originalTitle: 'Naruto: Shippuden',
     type: 'anime',
@@ -1692,7 +1692,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt1355642',
     imdbId: 'tt1355642',
-    kpId: '453397',
+    kpId: '452838',
     title: 'Стальной алхимик: Братство',
     originalTitle: 'Fullmetal Alchemist: Brotherhood',
     type: 'anime',
@@ -1718,7 +1718,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt2098220',
     imdbId: 'tt2098220',
-    kpId: '655800',
+    kpId: '647602',
     title: 'Охотник х Охотник',
     originalTitle: 'Hunter x Hunter',
     type: 'anime',
@@ -1744,7 +1744,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt10233448',
     imdbId: 'tt10233448',
-    kpId: '1171895',
+    kpId: '1274280',
     title: 'Сага о Винланде',
     originalTitle: 'Vinland Saga',
     type: 'anime',
@@ -1770,7 +1770,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt14986406',
     imdbId: 'tt14986406',
-    kpId: '4845345',
+    kpId: '4789626',
     title: 'Блич: Тысячелетняя кровавая война',
     originalTitle: 'Bleach: Sennen Kessen-hen',
     type: 'anime',
@@ -1796,7 +1796,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt12590266',
     imdbId: 'tt12590266',
-    kpId: '1402937',
+    kpId: '2000102',
     title: 'Киберпанк: Бегущие по краю',
     originalTitle: 'Cyberpunk: Edgerunners',
     type: 'anime',
@@ -1822,7 +1822,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt13706018',
     imdbId: 'tt13706018',
-    kpId: '4681866',
+    kpId: '4686248',
     title: 'Семья шпиона',
     originalTitle: 'Spy x Family',
     type: 'anime',
@@ -1848,7 +1848,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt26743760',
     imdbId: 'tt26743760',
-    kpId: '5281571',
+    kpId: '5258557',
     title: 'Монолог фармацевта',
     originalTitle: 'Kusuriya no Hitorigoto',
     type: 'anime',
@@ -1874,7 +1874,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt21030032',
     imdbId: 'tt21030032',
-    kpId: '5038461',
+    kpId: '',
     title: 'Звёздное дитя',
     originalTitle: 'Oshi no Ko',
     type: 'anime',
@@ -1900,7 +1900,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt15222080',
     imdbId: 'tt15222080',
-    kpId: '4542038',
+    kpId: '4624770',
     title: 'Синяя тюрьма: Блю Лок',
     originalTitle: 'Blue Lock',
     type: 'anime',
@@ -1926,7 +1926,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt4508902',
     imdbId: 'tt4508902',
-    kpId: '928485',
+    kpId: '942544',
     title: 'Ванпанчмен',
     originalTitle: 'One Punch Man',
     type: 'anime',
@@ -1952,7 +1952,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt1910272',
     imdbId: 'tt1910272',
-    kpId: '591852',
+    kpId: '586251',
     title: 'Врата Штейна',
     originalTitle: 'Steins;Gate',
     type: 'anime',
@@ -1978,7 +1978,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt0994314',
     imdbId: 'tt0994314',
-    kpId: '409080',
+    kpId: '408674',
     title: 'Код Гиас: Восставший Лелуш',
     originalTitle: 'Code Geass',
     type: 'anime',
@@ -2004,7 +2004,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt5897304',
     imdbId: 'tt5897304',
-    kpId: '991940',
+    kpId: '',
     title: 'Моб Психо 100',
     originalTitle: 'Mob Psycho 100',
     type: 'anime',
@@ -2030,7 +2030,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt3741634',
     imdbId: 'tt3741634',
-    kpId: '840212',
+    kpId: '',
     title: 'Токийский гуль',
     originalTitle: 'Tokyo Ghoul',
     type: 'anime',
@@ -2056,7 +2056,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt0318871',
     imdbId: 'tt0318871',
-    kpId: '408911',
+    kpId: '257376',
     title: 'Берсерк',
     originalTitle: 'Berserk',
     type: 'anime',
@@ -2082,7 +2082,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt32499824',
     imdbId: 'tt32499824',
-    kpId: '5525096',
+    kpId: '',
     title: 'Дни Сакамото',
     originalTitle: 'Sakamoto Days',
     type: 'anime',
@@ -2156,7 +2156,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt6587046',
     imdbId: 'tt6587046',
-    kpId: '1104215',
+    kpId: '1071383',
     title: 'Мальчик и птица',
     originalTitle: 'Kimitachi wa Dou Ikiru ka',
     type: 'anime',
@@ -2582,7 +2582,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt5753856',
     imdbId: 'tt5753856',
-    kpId: '1044487',
+    kpId: '1032606',
     title: 'Тьма',
     originalTitle: 'Dark',
     type: 'series',
@@ -2632,7 +2632,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt8111088',
     imdbId: 'tt8111088',
-    kpId: '1171894',
+    kpId: '1118138',
     title: 'Мандалорец',
     originalTitle: 'The Mandalorian',
     type: 'series',
@@ -2782,7 +2782,7 @@ export const SEED_CATALOG = [
   {
     id: 'tt7660850',
     imdbId: 'tt7660850',
-    kpId: '1044903',
+    kpId: '986788',
     title: 'Наследники',
     originalTitle: 'Succession',
     type: 'series',

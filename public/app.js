@@ -362,8 +362,8 @@ async function parseClientStreamBalancer(imdbId, kpId, preferredMirror = 'direct
 
   const mirrors = getClientMirrorList(preferredMirror);
   const paths = [];
-  if (kpId) paths.push(`/embed/kp/${encodeURIComponent(kpId)}`);
   if (imdbId) paths.push(`/embed/imdb/${encodeURIComponent(imdbId)}`);
+  if (kpId) paths.push(`/embed/kp/${encodeURIComponent(kpId)}`);
   if (paths.length === 0) return { found: false };
 
   try {
@@ -807,6 +807,59 @@ function getProgressPercent(h) {
   return Math.min(98, Math.max(4, Math.round((h.currentTime / total) * 100)));
 }
 
+function reconcileSavedItemsWithCatalog() {
+  if (!Array.isArray(state.masterCatalog) || state.masterCatalog.length === 0) return;
+  const masterByImdb = new Map();
+  for (const it of state.masterCatalog) {
+    if (it && it.imdbId) masterByImdb.set(it.imdbId, it);
+  }
+
+  let historyChanged = false;
+  for (const h of state.history) {
+    if (!h) continue;
+    if (h.imdbId === 'tt1321510' && /джентльмен|gentlemen/i.test(h.title || '')) {
+      h.imdbId = 'tt13210838';
+      if (h.id === 'tt1321510') h.id = 'tt13210838';
+      historyChanged = true;
+    }
+    const canon = masterByImdb.get(h.imdbId);
+    if (canon) {
+      const nextKp = canon.kpId ? String(canon.kpId) : '';
+      if (String(h.kpId || '') !== nextKp) {
+        h.kpId = nextKp;
+        historyChanged = true;
+      }
+    }
+  }
+  if (historyChanged) {
+    localStorage.setItem('spbguka_history', JSON.stringify(state.history));
+  }
+
+  let favChanged = false;
+  for (const f of state.favorites) {
+    if (!f) continue;
+    if (f.imdbId === 'tt1321510' && /джентльмен|gentlemen/i.test(f.title || '')) {
+      f.imdbId = 'tt13210838';
+      if (f.id === 'tt1321510') f.id = 'tt13210838';
+      favChanged = true;
+    }
+    const canon = masterByImdb.get(f.imdbId);
+    if (canon) {
+      const nextKp = canon.kpId ? String(canon.kpId) : '';
+      if (String(f.kpId || '') !== nextKp) {
+        f.kpId = nextKp;
+        favChanged = true;
+      }
+    }
+  }
+  if (favChanged) {
+    localStorage.setItem('spbguka_favorites', JSON.stringify(state.favorites));
+  }
+  if (historyChanged || favChanged) {
+    updateBadges();
+  }
+}
+
 function updateBadges() {
   favCountBadge.textContent = state.favorites.length;
   historyCountBadge.textContent = state.history.length;
@@ -988,6 +1041,7 @@ function applySyncedUser(userPayload) {
     state.favorites = userPayload.favorites;
     localStorage.setItem('spbguka_favorites', JSON.stringify(state.favorites));
   }
+  reconcileSavedItemsWithCatalog();
   updateBadges();
   updateAccountUI();
   if (state.catalogItems && state.catalogItems.length > 0) {
@@ -2011,6 +2065,7 @@ async function loadCatalog() {
         const data = await res.json();
         state.masterCatalog = data.items || [];
         catalogUpdatedAt = Number(data.updatedAt) || 0;
+        reconcileSavedItemsWithCatalog();
       } catch (e) {
         state.masterCatalog = [];
       }
@@ -2350,10 +2405,23 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   if (lobbyOverride && lobbyOverride.balancer) {
     state.selectedBalancer = lobbyOverride.balancer;
   }
-  state.currentItem = {
+  let effectiveImdbId = itemSummary.imdbId;
+  if (effectiveImdbId === 'tt1321510' && /джентльмен|gentlemen/i.test(itemSummary.title || '')) {
+    effectiveImdbId = 'tt13210838';
+  }
+  const canonicalItem = (state.masterCatalog || []).find(x => x.imdbId === effectiveImdbId);
+  const effectiveKpId = canonicalItem ? (canonicalItem.kpId || '') : (itemSummary.kpId || '');
+  const resolvedSummary = {
     ...itemSummary,
-    qualities: itemSummary.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
-    providers: itemSummary.providers || [
+    id: itemSummary.id === 'tt1321510' && effectiveImdbId === 'tt13210838' ? 'tt13210838' : itemSummary.id,
+    imdbId: effectiveImdbId,
+    kpId: effectiveKpId
+  };
+
+  state.currentItem = {
+    ...resolvedSummary,
+    qualities: resolvedSummary.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
+    providers: resolvedSummary.providers || [
       { id: 'direct', name: 'СПБГУКА Direct HLS (Чистый поток • 0% рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' }
     ]
   };
@@ -2363,11 +2431,11 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   document.body.style.overflow = 'hidden';
   clearTvFocus();
 
-  const savedHistory = lobbyOverride ? null : state.history.find(h => h.imdbId === itemSummary.imdbId);
+  const savedHistory = lobbyOverride ? null : state.history.find(h => h.imdbId === effectiveImdbId || h.imdbId === itemSummary.imdbId);
   state.selectedSeason = lobbyOverride?.season || savedHistory?.season || 1;
   state.selectedEpisode = lobbyOverride?.episode || savedHistory?.episode || 1;
   state.preferredVoice = lobbyOverride?.voice || savedHistory?.voice || '';
-  state.selectedVoice = lobbyOverride?.voice || savedHistory?.voice || (itemSummary.voices && itemSummary.voices[0]) || 'Рус. Дублированный';
+  state.selectedVoice = lobbyOverride?.voice || savedHistory?.voice || (resolvedSummary.voices && resolvedSummary.voices[0]) || 'Рус. Дублированный';
   state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
 
   // Immediately render card metadata so modal opens in 0ms
@@ -2375,29 +2443,32 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   updateFavButtonState();
   updateBalancerButtons();
   switchModalTab(initialTab);
-  nowPlayingText.textContent = `Подключение потока: ${itemSummary.title}...`;
+  nowPlayingText.textContent = `Подключение потока: ${resolvedSummary.title}...`;
 
   const fallbackDetailed = {
-    ...itemSummary,
-    seasons: { 1: [{ season: 1, episode: 1, title: 'Основной поток', hlsUrl: '', voices: itemSummary.voices || ['Рус. Дублированный'] }] },
+    ...resolvedSummary,
+    seasons: { 1: [{ season: 1, episode: 1, title: 'Основной поток', hlsUrl: '', voices: resolvedSummary.voices || ['Рус. Дублированный'] }] },
     qualities: ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
     providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
   };
 
   // Run fast server metadata lookup (?fast=1) and parallel client mirror extraction simultaneously
   const [detailedRes, initialClientData] = await Promise.all([
-    fetch(`/api/details?imdb=${encodeURIComponent(itemSummary.imdbId)}&title=${encodeURIComponent(itemSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`)
+    fetch(`/api/details?imdb=${encodeURIComponent(effectiveImdbId)}&title=${encodeURIComponent(resolvedSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`)
       .then(r => r.json())
       .catch(() => fallbackDetailed),
-    parseClientStreamBalancer(itemSummary.imdbId, itemSummary.kpId, state.selectedBalancer)
+    parseClientStreamBalancer(effectiveImdbId, effectiveKpId, state.selectedBalancer)
   ]);
 
   if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
 
   const detailed = detailedRes || fallbackDetailed;
+  if (canonicalItem) {
+    detailed.kpId = effectiveKpId;
+  }
   let clientData = initialClientData;
 
-  if ((!clientData || !clientData.found) && !itemSummary.kpId && detailed.kpId) {
+  if ((!clientData || !clientData.found) && !effectiveKpId && detailed.kpId) {
     clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, state.selectedBalancer);
     if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
   }
@@ -3451,8 +3522,8 @@ async function loadClientCleanEmbed(item, balancerName) {
   const mirrors = getClientMirrorList(mirrorKey);
   const query = `?season=${encodeURIComponent(String(state.selectedSeason || 1))}&episode=${encodeURIComponent(String(state.selectedEpisode || 1))}`;
   const paths = [];
-  if (item.kpId) paths.push(`/embed/kp/${encodeURIComponent(item.kpId)}${query}`);
   if (item.imdbId) paths.push(`/embed/imdb/${encodeURIComponent(item.imdbId)}${query}`);
+  if (item.kpId) paths.push(`/embed/kp/${encodeURIComponent(item.kpId)}${query}`);
 
   for (const mirror of mirrors) {
     for (const p of paths) {
@@ -3627,9 +3698,9 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     const kpId = item.kpId || (item.id && /^\d+$/.test(item.id) ? item.id : '');
     const isSeries = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
     const query = isSeries ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
-    const embedUrl = kpId
-      ? `https://kinokino.vip/embed/kp/${kpId}${query}`
-      : `https://kinokino.vip/embed/imdb/${item.imdbId}${query}`;
+    const embedUrl = item.imdbId
+      ? `https://kinokino.vip/embed/imdb/${item.imdbId}${query}`
+      : `https://kinokino.vip/embed/kp/${kpId}${query}`;
     balancerIframe.removeAttribute('srcdoc');
     balancerIframe.src = embedUrl;
     showPlayerOsd('Источник kinokino.vip загружен');
