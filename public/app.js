@@ -1712,6 +1712,9 @@ function applyIncomingLobbyPlayback(playback, hostUsername = 'хост', serverN
     lobbyState.pendingSyncPlayback = playback;
     if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
       lobbyModal.classList.add('hidden');
+      replaceOverlayHistory('lobby', 'item');
+    } else {
+      pushOverlayHistory('item');
     }
     openItemModal(playback.mediaItem, 'player', {
       season: playback.season || 1,
@@ -1839,19 +1842,22 @@ async function sendLobbyChatText(rawText) {
   }
 }
 
-function togglePlayerChatDrawer(forceState = null) {
+function togglePlayerChatDrawer(forceState = null, { fromPopstate = false } = {}) {
   if (!lobbyState.lobby) return;
   lobbyState.chatOpenInPlayer = forceState === null ? !lobbyState.chatOpenInPlayer : Boolean(forceState);
   if (lobbyState.chatOpenInPlayer) {
     lobbyState.unreadMessages = 0;
   }
   updateLobbyUi();
+  if (lobbyState.chatOpenInPlayer) pushOverlayHistory('chat');
+  else if (!fromPopstate) popOverlayHistory('chat');
 }
 
 function openLobbyModal() {
   if (!lobbyModal) return;
   updateLobbyUi();
   lobbyModal.classList.remove('hidden');
+  pushOverlayHistory('lobby');
   if (authToken) {
     refreshLobbyState().then(() => fetchLobbyUsers(lobbyUserSearchInput?.value.trim() || ''));
   }
@@ -2217,6 +2223,7 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   };
 
   itemModal.classList.remove('hidden');
+  pushOverlayHistory('item');
   document.body.style.overflow = 'hidden';
   clearTvFocus();
 
@@ -3009,8 +3016,11 @@ function toggleVcMoreMenu() {
   vcMoreMenu.classList.toggle('hidden', !isHidden);
   revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   if (isHidden) {
+    pushOverlayHistory('vcMore');
     const firstFocusable = vcMoreMenu.querySelector('.focusable');
     if (firstFocusable && isSmartTv) firstFocusable.focus();
+  } else {
+    popOverlayHistory('vcMore');
   }
 }
 
@@ -3079,12 +3089,14 @@ async function openActorProfile(actorName) {
   }
 
   actorModal.classList.remove('hidden');
+  pushOverlayHistory('actor');
   const firstFocus = actorModal.querySelector('.focusable');
   if (firstFocus && isSmartTv) firstFocus.focus();
 }
 
-function closeActorProfile() {
+function closeActorProfile({ fromPopstate = false } = {}) {
   if (actorModal) actorModal.classList.add('hidden');
+  if (!fromPopstate) popOverlayHistory('actor');
 }
 
 function setPlayerScreenLocked(locked) {
@@ -3558,7 +3570,7 @@ function switchModalTab(tabName) {
   }
 }
 
-function closeItemModal() {
+function closeItemModal({ fromPopstate = false } = {}) {
   const closedCurTime = Number.isFinite(html5Video?.currentTime) ? html5Video.currentTime : 0;
   const closedItem = state.currentItem;
   if (isLobbyHost() && closedItem) {
@@ -3571,7 +3583,8 @@ function closeItemModal() {
   lobbyState.chatOpenInPlayer = false;
   lobbyState.pendingAutoplayBlocked = false;
   updateLobbyUi();
-  exitVideoFullscreen();
+  if (vcMoreMenu) vcMoreMenu.classList.add('hidden');
+  exitVideoFullscreen({ fromPopstate: true });
   saveLivePlaybackProgress();
   scheduleAccountPush('merge', true);
   modalOpenToken++;
@@ -3598,6 +3611,7 @@ function closeItemModal() {
   document.body.style.overflow = '';
   updateBadges();
   clearTvFocus();
+  if (!fromPopstate) popOverlayHistory('item');
 }
 
 function updateFavButtonState() {
@@ -3642,12 +3656,42 @@ function enterPseudoFullscreen(target) {
 }
 
 let pendingFsFallbackTimer = null;
+let wasNativeFullscreen = false;
+let lastRequestedFsTarget = null;
 
-function exitVideoFullscreen() {
+function handleFullscreenChange() {
+  const fsEl = getFullscreenElement();
+  if (fsEl) {
+    wasNativeFullscreen = true;
+    if (pendingFsFallbackTimer) {
+      clearTimeout(pendingFsFallbackTimer);
+      pendingFsFallbackTimer = null;
+    }
+    if (videoStageArea) videoStageArea.classList.remove('pseudo-fullscreen');
+    if (iframePlayerWrap) iframePlayerWrap.classList.remove('pseudo-fullscreen');
+    document.body.classList.remove('pseudo-fullscreen-open');
+    syncFullscreenUi();
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+  } else {
+    if (wasNativeFullscreen) {
+      wasNativeFullscreen = false;
+      if (videoStageArea) videoStageArea.classList.remove('pseudo-fullscreen');
+      if (iframePlayerWrap) iframePlayerWrap.classList.remove('pseudo-fullscreen');
+      document.body.classList.remove('pseudo-fullscreen-open');
+      syncFullscreenUi();
+      popOverlayHistory('fullscreen');
+    } else {
+      syncFullscreenUi();
+    }
+  }
+}
+
+function exitVideoFullscreen({ fromPopstate = false } = {}) {
   if (pendingFsFallbackTimer) {
     clearTimeout(pendingFsFallbackTimer);
     pendingFsFallbackTimer = null;
   }
+  wasNativeFullscreen = false;
   if (videoStageArea) videoStageArea.classList.remove('pseudo-fullscreen');
   if (iframePlayerWrap) iframePlayerWrap.classList.remove('pseudo-fullscreen');
   document.body.classList.remove('pseudo-fullscreen-open');
@@ -3665,6 +3709,7 @@ function exitVideoFullscreen() {
     }
   }
   syncFullscreenUi();
+  if (!fromPopstate) popOverlayHistory('fullscreen');
 }
 
 function enterVideoFullscreen() {
@@ -3673,19 +3718,72 @@ function enterVideoFullscreen() {
     : (videoStageArea || html5Video);
   if (!target) return;
 
+  pushOverlayHistory('fullscreen');
+
+  lastRequestedFsTarget = target;
   if (pendingFsFallbackTimer) {
     clearTimeout(pendingFsFallbackTimer);
     pendingFsFallbackTimer = null;
   }
 
-  // On LG webOS / Smart TVs use instant full-viewport container mode so overlays, D-Pad & Back (461) never lag
-  if (isSmartTv) {
-    enterPseudoFullscreen(target);
-    return;
+  const triggerPseudoFallback = () => {
+    if (pendingFsFallbackTimer) {
+      clearTimeout(pendingFsFallbackTimer);
+      pendingFsFallbackTimer = null;
+    }
+    if (!getFullscreenElement()) {
+      enterPseudoFullscreen(target);
+    }
+  };
+
+  if (target.requestFullscreen) {
+    pendingFsFallbackTimer = setTimeout(() => {
+      pendingFsFallbackTimer = null;
+      if (!isVideoFullscreen()) enterPseudoFullscreen(target);
+    }, 650);
+
+    const onNativeSuccess = () => {
+      if (pendingFsFallbackTimer) {
+        clearTimeout(pendingFsFallbackTimer);
+        pendingFsFallbackTimer = null;
+      }
+      if (!getFullscreenElement()) {
+        enterPseudoFullscreen(target);
+      } else {
+        handleFullscreenChange();
+      }
+    };
+
+    try {
+      const p = target.requestFullscreen({ navigationUI: 'hide' });
+      if (p && typeof p.then === 'function') {
+        p.then(onNativeSuccess).catch(() => {
+          try {
+            const p2 = target.requestFullscreen();
+            if (p2 && typeof p2.then === 'function') {
+              p2.then(onNativeSuccess).catch(triggerPseudoFallback);
+            }
+          } catch (e2) {
+            triggerPseudoFallback();
+          }
+        });
+      }
+      return;
+    } catch (e) {
+      try {
+        const p2 = target.requestFullscreen();
+        if (p2 && typeof p2.then === 'function') {
+          p2.then(onNativeSuccess).catch(triggerPseudoFallback);
+        }
+        return;
+      } catch (e2) {
+        triggerPseudoFallback();
+        return;
+      }
+    }
   }
 
-  const reqFn = target.requestFullscreen ||
-    target.webkitRequestFullscreen ||
+  const reqFn = target.webkitRequestFullscreen ||
     target.mozRequestFullScreen ||
     target.msRequestFullscreen;
 
@@ -3693,7 +3791,7 @@ function enterVideoFullscreen() {
     pendingFsFallbackTimer = setTimeout(() => {
       pendingFsFallbackTimer = null;
       if (!isVideoFullscreen()) enterPseudoFullscreen(target);
-    }, 250);
+    }, 650);
     try {
       const p = reqFn.call(target);
       if (p && typeof p.then === 'function') {
@@ -3705,28 +3803,17 @@ function enterVideoFullscreen() {
           if (!getFullscreenElement()) {
             enterPseudoFullscreen(target);
           } else {
-            syncFullscreenUi();
-            revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+            handleFullscreenChange();
           }
-        }).catch(() => {
-          if (pendingFsFallbackTimer) {
-            clearTimeout(pendingFsFallbackTimer);
-            pendingFsFallbackTimer = null;
-          }
-          enterPseudoFullscreen(target);
-        });
-        return;
+        }).catch(triggerPseudoFallback);
       }
       return;
     } catch (e) {
-      if (pendingFsFallbackTimer) {
-        clearTimeout(pendingFsFallbackTimer);
-        pendingFsFallbackTimer = null;
-      }
-      enterPseudoFullscreen(target);
+      triggerPseudoFallback();
       return;
     }
   }
+
   enterPseudoFullscreen(target);
 }
 
@@ -3737,6 +3824,187 @@ function toggleVideoFullscreen() {
     enterVideoFullscreen();
   }
 }
+
+// Per-Layer User-Gesture History Stack (never calls pushState inside popstate, immune to Chromium Back-skipping)
+const overlayHistoryStack = [];
+let ignoringGuardPops = 0;
+let committedHistoryDepth = 0;
+
+try {
+  if (!window.history.state || typeof window.history.state.spbgukaDepth !== 'number') {
+    window.history.replaceState({ ...(window.history.state || {}), spbgukaRoot: true, spbgukaDepth: 0 }, '');
+  } else {
+    committedHistoryDepth = Number(window.history.state.spbgukaDepth) || 0;
+  }
+} catch (e) {}
+
+function hasAnyOpenOverlay() {
+  return Boolean(
+    (vcMoreMenu && !vcMoreMenu.classList.contains('hidden')) ||
+    (playerChatDrawer && !playerChatDrawer.classList.contains('hidden')) ||
+    isVideoFullscreen() ||
+    (actorModal && !actorModal.classList.contains('hidden')) ||
+    (lobbyModal && !lobbyModal.classList.contains('hidden')) ||
+    (installModal && !installModal.classList.contains('hidden')) ||
+    (accountModal && !accountModal.classList.contains('hidden')) ||
+    (parsersModal && !parsersModal.classList.contains('hidden')) ||
+    (itemModal && !itemModal.classList.contains('hidden'))
+  );
+}
+
+function pushOverlayHistory(layer) {
+  if (!layer) return;
+  if (overlayHistoryStack.includes(layer)) return;
+  overlayHistoryStack.push(layer);
+  try {
+    window.history.pushState({ spbgukaDepth: overlayHistoryStack.length, spbgukaLayer: layer }, '');
+    committedHistoryDepth = overlayHistoryStack.length;
+  } catch (e) {
+    overlayHistoryStack.pop();
+  }
+}
+
+function popOverlayHistory(layer) {
+  const idx = overlayHistoryStack.lastIndexOf(layer);
+  if (idx === -1) return;
+  const popCount = overlayHistoryStack.length - idx;
+  overlayHistoryStack.splice(idx, popCount);
+  if (popCount > 0 && committedHistoryDepth > 0) {
+    const stepsToPop = Math.min(popCount, committedHistoryDepth);
+    if (stepsToPop > 0) {
+      committedHistoryDepth = Math.max(0, committedHistoryDepth - stepsToPop);
+      ignoringGuardPops++;
+      try {
+        window.history.go(-stepsToPop);
+      } catch (e) {
+        ignoringGuardPops = Math.max(0, ignoringGuardPops - 1);
+      }
+    }
+  }
+}
+
+function replaceOverlayHistory(oldLayer, newLayer) {
+  if (!newLayer) return;
+  if (overlayHistoryStack.includes(newLayer)) {
+    popOverlayHistory(oldLayer);
+    return;
+  }
+  const idx = overlayHistoryStack.lastIndexOf(oldLayer);
+  if (idx === -1) {
+    pushOverlayHistory(newLayer);
+    return;
+  }
+  overlayHistoryStack[idx] = newLayer;
+  try {
+    window.history.replaceState({ spbgukaDepth: idx + 1, spbgukaLayer: newLayer }, '');
+  } catch (e) {}
+}
+
+function closeOverlayLayer(layer, { fromPopstate = false } = {}) {
+  switch (layer) {
+    case 'vcMore':
+      if (vcMoreMenu && !vcMoreMenu.classList.contains('hidden')) {
+        vcMoreMenu.classList.add('hidden');
+        revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+      }
+      if (!fromPopstate) popOverlayHistory('vcMore');
+      return true;
+    case 'chat':
+      if (playerChatDrawer && !playerChatDrawer.classList.contains('hidden')) {
+        togglePlayerChatDrawer(false, { fromPopstate });
+      } else if (!fromPopstate) {
+        popOverlayHistory('chat');
+      }
+      return true;
+    case 'fullscreen':
+      if (isVideoFullscreen()) {
+        exitVideoFullscreen({ fromPopstate });
+      } else if (!fromPopstate) {
+        popOverlayHistory('fullscreen');
+      }
+      return true;
+    case 'actor':
+      if (actorModal && !actorModal.classList.contains('hidden')) {
+        closeActorProfile({ fromPopstate });
+      } else if (!fromPopstate) {
+        popOverlayHistory('actor');
+      }
+      return true;
+    case 'lobby':
+      if (lobbyModal) lobbyModal.classList.add('hidden');
+      if (!fromPopstate) popOverlayHistory('lobby');
+      return true;
+    case 'install':
+      if (installModal) installModal.classList.add('hidden');
+      if (!fromPopstate) popOverlayHistory('install');
+      return true;
+    case 'account':
+      if (accountModal) accountModal.classList.add('hidden');
+      if (!fromPopstate) popOverlayHistory('account');
+      return true;
+    case 'parsers':
+      if (parsersModal) parsersModal.classList.add('hidden');
+      if (!fromPopstate) popOverlayHistory('parsers');
+      return true;
+    case 'item':
+      if (itemModal && !itemModal.classList.contains('hidden')) {
+        closeItemModal({ fromPopstate });
+      } else if (!fromPopstate) {
+        popOverlayHistory('item');
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
+function closeTopmostOverlay({ fromPopstate = false } = {}) {
+  if (vcMoreMenu && !vcMoreMenu.classList.contains('hidden')) {
+    return closeOverlayLayer('vcMore', { fromPopstate });
+  }
+  if (playerChatDrawer && !playerChatDrawer.classList.contains('hidden')) {
+    return closeOverlayLayer('chat', { fromPopstate });
+  }
+  if (isVideoFullscreen()) {
+    return closeOverlayLayer('fullscreen', { fromPopstate });
+  }
+  if (actorModal && !actorModal.classList.contains('hidden')) {
+    return closeOverlayLayer('actor', { fromPopstate });
+  }
+  if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
+    return closeOverlayLayer('lobby', { fromPopstate });
+  }
+  if (installModal && !installModal.classList.contains('hidden')) {
+    return closeOverlayLayer('install', { fromPopstate });
+  }
+  if (accountModal && !accountModal.classList.contains('hidden')) {
+    return closeOverlayLayer('account', { fromPopstate });
+  }
+  if (parsersModal && !parsersModal.classList.contains('hidden')) {
+    return closeOverlayLayer('parsers', { fromPopstate });
+  }
+  if (itemModal && !itemModal.classList.contains('hidden')) {
+    return closeOverlayLayer('item', { fromPopstate });
+  }
+  return false;
+}
+
+window.addEventListener('popstate', e => {
+  if (ignoringGuardPops > 0) {
+    ignoringGuardPops--;
+    return;
+  }
+  committedHistoryDepth = Number(e.state?.spbgukaDepth) || 0;
+  const targetDepth = committedHistoryDepth;
+  if (overlayHistoryStack.length > targetDepth) {
+    while (overlayHistoryStack.length > targetDepth) {
+      const layer = overlayHistoryStack.pop();
+      closeOverlayLayer(layer, { fromPopstate: true });
+    }
+  } else if (hasAnyOpenOverlay()) {
+    closeTopmostOverlay({ fromPopstate: true });
+  }
+});
 
 // Spatial TV D-Pad Navigation (LG webOS / Samsung Tizen / HTPC Linux)
 function getArrowDirection(e) {
@@ -3751,8 +4019,17 @@ function isConfirmKey(e) {
   return e.key === 'Enter' || e.key === 'Select' || e.key === 'Accept' || e.keyCode === 13 || e.keyCode === 23;
 }
 
-function isBackKey(e) {
-  return e.key === 'Escape' || e.key === 'BrowserBack' || e.key === 'GoBack' || e.keyCode === 461 || e.keyCode === 10009;
+function isBackKey(e, isTyping = false) {
+  return (
+    e.key === 'Escape' ||
+    e.key === 'BrowserBack' ||
+    e.key === 'GoBack' ||
+    e.key === 'XF86Back' ||
+    e.key === 'Back' ||
+    e.keyCode === 461 ||
+    e.keyCode === 10009 ||
+    (!isTyping && (e.key === 'Backspace' || e.keyCode === 8))
+  );
 }
 
 function isTextEditingActive() {
@@ -4254,6 +4531,7 @@ if (vcSleepChips) {
       e.stopPropagation();
       setSleepTimer(chip.dataset.sleep || 'off');
       if (vcMoreMenu) vcMoreMenu.classList.add('hidden');
+      popOverlayHistory('vcMore');
       revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
     });
   });
@@ -4283,6 +4561,7 @@ if (vcMoreCloseBtn) {
   vcMoreCloseBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (vcMoreMenu) vcMoreMenu.classList.add('hidden');
+    popOverlayHistory('vcMore');
     revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   });
 }
@@ -4290,6 +4569,7 @@ document.addEventListener('click', (e) => {
   if (vcMoreMenu && !vcMoreMenu.classList.contains('hidden')) {
     if (!vcMoreMenu.contains(e.target) && !vcMoreBtn?.contains(e.target)) {
       vcMoreMenu.classList.add('hidden');
+      popOverlayHistory('vcMore');
       revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
     }
   }
@@ -4502,8 +4782,23 @@ document.addEventListener('touchstart', () => {
   });
 });
 
-document.addEventListener('fullscreenchange', syncFullscreenUi);
-document.addEventListener('webkitfullscreenchange', syncFullscreenUi);
+document.addEventListener('fullscreenchange', handleFullscreenChange);
+document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+['fullscreenerror', 'webkitfullscreenerror'].forEach(evt => {
+  document.addEventListener(evt, () => {
+    if (pendingFsFallbackTimer) {
+      clearTimeout(pendingFsFallbackTimer);
+      pendingFsFallbackTimer = null;
+    }
+    const target = lastRequestedFsTarget || (directPlayerWrap.classList.contains('hidden') ? iframePlayerWrap : (videoStageArea || html5Video));
+    if (target && !isVideoFullscreen()) {
+      enterPseudoFullscreen(target);
+    }
+  });
+});
 
 html5Video.addEventListener('timeupdate', () => {
   updateSmartVideoOverlay();
@@ -4712,10 +5007,19 @@ refreshParsersBtn.addEventListener('click', () => {
   }
 });
 
-parsersStatusBtn.addEventListener('click', () => parsersModal.classList.remove('hidden'));
-closeParsersModalBtn.addEventListener('click', () => parsersModal.classList.add('hidden'));
+parsersStatusBtn.addEventListener('click', () => {
+  parsersModal.classList.remove('hidden');
+  pushOverlayHistory('parsers');
+});
+closeParsersModalBtn.addEventListener('click', () => {
+  parsersModal.classList.add('hidden');
+  popOverlayHistory('parsers');
+});
 parsersModal.addEventListener('click', e => {
-  if (e.target === parsersModal) parsersModal.classList.add('hidden');
+  if (e.target === parsersModal) {
+    parsersModal.classList.add('hidden');
+    popOverlayHistory('parsers');
+  }
 });
 
 // Unified Capture-Phase Keyboard & Smart TV Remote Navigation (D-Pad Ring, Back=461/10009, Media Keys)
@@ -4730,49 +5034,11 @@ document.addEventListener('keydown', e => {
   }
 
   // Back / Escape handling: first exit fullscreen / close chat, then close top-most modal
-  if (isBackKey(e)) {
-    if (playerChatDrawer && !playerChatDrawer.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      togglePlayerChatDrawer(false);
-      return;
-    }
-    if (isVideoFullscreen()) {
-      e.preventDefault();
-      e.stopPropagation();
-      exitVideoFullscreen();
-      return;
-    }
-    if (lobbyModal && !lobbyModal.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      lobbyModal.classList.add('hidden');
-      return;
-    }
-    if (installModal && !installModal.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      installModal.classList.add('hidden');
-      return;
-    }
-    if (accountModal && !accountModal.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      accountModal.classList.add('hidden');
-      return;
-    }
-    if (!parsersModal.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      parsersModal.classList.add('hidden');
-      return;
-    }
-    if (!itemModal.classList.contains('hidden')) {
-      e.preventDefault();
-      e.stopPropagation();
-      closeItemModal();
-      return;
-    }
+  if (isBackKey(e, isTyping) && hasAnyOpenOverlay()) {
+    e.preventDefault();
+    e.stopPropagation();
+    closeTopmostOverlay({ fromPopstate: false });
+    return;
   }
 
   // Media Player Hotkeys (Play/Pause, Seek, Fullscreen)
@@ -4896,6 +5162,7 @@ if (accountBtn) {
     updateAccountUI();
     if (authToken) pullAccountSync(true);
     accountModal.classList.remove('hidden');
+    pushOverlayHistory('account');
   });
 }
 
@@ -4904,11 +5171,15 @@ if (mobAccountNavBtn) {
     updateAccountUI();
     if (authToken) pullAccountSync(true);
     accountModal.classList.remove('hidden');
+    pushOverlayHistory('account');
   });
 }
 
 if (closeAccountModalBtn) {
-  closeAccountModalBtn.addEventListener('click', () => accountModal.classList.add('hidden'));
+  closeAccountModalBtn.addEventListener('click', () => {
+    accountModal.classList.add('hidden');
+    popOverlayHistory('account');
+  });
 }
 
 if (allNewReleasesBtn) {
@@ -4990,7 +5261,10 @@ if (randomPickBtn) {
 
 if (accountModal) {
   accountModal.addEventListener('click', e => {
-    if (e.target === accountModal) accountModal.classList.add('hidden');
+    if (e.target === accountModal) {
+      accountModal.classList.add('hidden');
+      popOverlayHistory('account');
+    }
   });
 }
 
@@ -5034,6 +5308,7 @@ if (authForm) {
       applySyncedUser(data.user);
       authPasswordInput.value = '';
       accountModal.classList.add('hidden');
+      popOverlayHistory('account');
       showPlayerOsd(`Вход выполнен: ${authUser}`);
     } catch (err) {
       showAuthMessage('Нет связи с сервером');
@@ -5156,11 +5431,14 @@ function updateInstallPromptUI() {
 
 function openInstallModal() {
   if (!installModal) return;
-  if (accountModal && !accountModal.classList.contains('hidden')) {
+  const fromAccount = accountModal && !accountModal.classList.contains('hidden');
+  if (fromAccount) {
     accountModal.classList.add('hidden');
   }
   updateInstallPromptUI();
   installModal.classList.remove('hidden');
+  if (fromAccount) replaceOverlayHistory('account', 'install');
+  else pushOverlayHistory('install');
 }
 
 window.addEventListener('beforeinstallprompt', e => {
@@ -5179,11 +5457,17 @@ if (installAppBtn) installAppBtn.addEventListener('click', openInstallModal);
 if (openInstallFromSidebarBtn) openInstallFromSidebarBtn.addEventListener('click', openInstallModal);
 if (openInstallFromAccountBtn) openInstallFromAccountBtn.addEventListener('click', openInstallModal);
 if (closeInstallModalBtn) {
-  closeInstallModalBtn.addEventListener('click', () => installModal.classList.add('hidden'));
+  closeInstallModalBtn.addEventListener('click', () => {
+    installModal.classList.add('hidden');
+    popOverlayHistory('install');
+  });
 }
 if (installModal) {
   installModal.addEventListener('click', e => {
-    if (e.target === installModal) installModal.classList.add('hidden');
+    if (e.target === installModal) {
+      installModal.classList.add('hidden');
+      popOverlayHistory('install');
+    }
   });
 }
 if (pwaInstallActionBtn) {
@@ -5210,10 +5494,18 @@ if (pwaInstallActionBtn) {
 // Watch Party / Lobby Event Listeners
 if (lobbyBtn) lobbyBtn.addEventListener('click', openLobbyModal);
 if (lobbyPlayerPill) lobbyPlayerPill.addEventListener('click', openLobbyModal);
-if (closeLobbyModalBtn) closeLobbyModalBtn.addEventListener('click', () => lobbyModal.classList.add('hidden'));
+if (closeLobbyModalBtn) {
+  closeLobbyModalBtn.addEventListener('click', () => {
+    lobbyModal.classList.add('hidden');
+    popOverlayHistory('lobby');
+  });
+}
 if (lobbyModal) {
   lobbyModal.addEventListener('click', e => {
-    if (e.target === lobbyModal) lobbyModal.classList.add('hidden');
+    if (e.target === lobbyModal) {
+      lobbyModal.classList.add('hidden');
+      popOverlayHistory('lobby');
+    }
   });
 }
 
@@ -5223,6 +5515,9 @@ if (lobbyLoginRedirectBtn) {
     if (accountModal) {
       updateAccountUI();
       accountModal.classList.remove('hidden');
+      replaceOverlayHistory('lobby', 'account');
+    } else {
+      popOverlayHistory('lobby');
     }
   });
 }
@@ -5286,6 +5581,7 @@ if (lobbyRoomCodeBadge) {
 if (lobbyBrowseFilmsBtn) {
   lobbyBrowseFilmsBtn.addEventListener('click', () => {
     lobbyModal.classList.add('hidden');
+    popOverlayHistory('lobby');
   });
 }
 
@@ -5293,6 +5589,7 @@ function jumpToCurrentLobbyMedia() {
   const pb = lobbyState.lobby?.playback;
   if (!pb || !pb.mediaItem) return;
   lobbyModal.classList.add('hidden');
+  replaceOverlayHistory('lobby', 'item');
   const targetSec = computeLobbyTargetTime(pb);
   openItemModal(pb.mediaItem, 'player', {
     season: pb.season || 1,
