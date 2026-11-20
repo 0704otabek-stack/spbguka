@@ -6,6 +6,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { fileURLToPath } from 'node:url';
+import SEED_CATALOG from './catalog-seed.js';
 
 const { Pool } = pg;
 
@@ -23,569 +24,6 @@ process.on('unhandledRejection', err => {
 // Must use identical User-Agent across embed lookup and HLS segment proxy because upstream signs URLs with UA hash (hu=...)
 const UPSTREAM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 const UPSTREAM_ORIGIN = 'https://api.namy.ws';
-
-// Curated seed catalog of popular & iconic Movies, Series, Cartoons, and Anime (Russian metadata + real KP & IMDb IDs)
-const SEED_CATALOG = [
-  {
-    id: 'tt0903747',
-    imdbId: 'tt0903747',
-    kpId: '404900',
-    title: 'Во все тяжкие',
-    originalTitle: 'Breaking Bad',
-    type: 'series',
-    year: 2008,
-    yearRange: '2008–2013',
-    ratingKp: 8.9,
-    ratingImdb: 9.5,
-    country: 'США',
-    genres: ['Криминал', 'Драма', 'Триллер'],
-    duration: '47 мин / серия',
-    director: 'Винс Гиллиган',
-    cast: 'Брайан Крэнстон, Аарон Пол, Анна Ганн, Дин Норрис, Боб Оденкёрк',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMzU5ZGYzNmQtMTdhYy00OGRiLTg0NmQtYjVjNzliZTg1ZGE4XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 5,
-    episodesPerSeason: [7, 13, 13, 13, 16],
-    voices: ['Кубик в кубе', 'Рус. Дублированный', 'LostFilm', 'Fox', 'Ю. Сербин', 'Дмитрий "Goblin" Пучков', 'Eng.Original'],
-    description: 'Школьный учитель химии Уолтер Уайт узнаёт, что болен раком лёгких. Учитывая сложное финансовое состояние дел семьи, а также перспективы, Уолтер решает заняться изготовлением метамфетамина. Для этого он привлекает своего бывшего ученика Джесси Пинкмана.'
-  },
-  {
-    id: 'tt28429213',
-    imdbId: 'tt28429213',
-    kpId: '5304403',
-    title: 'Слово пацана. Кровь на асфальте',
-    originalTitle: 'Slovo patsana. Krov na asfalte',
-    type: 'series',
-    year: 2023,
-    yearRange: '2023',
-    ratingKp: 8.3,
-    ratingImdb: 8.4,
-    country: 'Россия',
-    genres: ['Драма', 'Криминал'],
-    duration: '50 мин / серия',
-    director: 'Жора Крыжовников',
-    cast: 'Иван Янковский, Рузиль Минекаев, Леон Кемстач, Елизавета Базыкина, Никита Кологривый',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNjkxMDY3MTEtNDhlNy00NmY5LThiNjQtMzEzYzllM2I4ZWMwXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 1,
-    episodesPerSeason: [8],
-    voices: ['Рус. Оригинальный'],
-    description: 'Конец 1980-х. Пока родители борются за выживание, брошенные всеми дети сбиваются в уличные стаи и делят асфальт. Четырнадцатилетний Андрей из интеллигентной семьи заводит дружбу с пацанами из группировки «Универсам».'
-  },
-  {
-    id: 'tt15239678',
-    imdbId: 'tt15239678',
-    kpId: '4540126',
-    title: 'Дюна: Часть вторая',
-    originalTitle: 'Dune: Part Two',
-    type: 'movie',
-    year: 2024,
-    yearRange: '2024',
-    ratingKp: 8.2,
-    ratingImdb: 8.5,
-    country: 'США, Канада',
-    genres: ['Фантастика', 'Боевик', 'Драма', 'Приключения'],
-    duration: '166 мин',
-    director: 'Дени Вильнёв',
-    cast: 'Тимоти Шаламе, Зендея, Ребекка Фергюсон, Хавьер Бардем, Остин Батлер',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNTc0YmQxMjEtODI5MC00NjFiLTlkMWUtOGQ5NjFmYWUyZGJhXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    voices: ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio (Дубл.)', 'LostFilm', 'TVShows', 'JASKIER', 'Eng.Original'],
-    description: 'Герцог Пол Атрейдес присоединяется к фременам, чтобы стать Муад’Дибом, одновременно пытаясь остановить наступление войны и отомстить заговорщикам, уничтожившим его семью.'
-  },
-  {
-    id: 'tt0816692',
-    imdbId: 'tt0816692',
-    kpId: '258687',
-    title: 'Интерстеллар',
-    originalTitle: 'Interstellar',
-    type: 'movie',
-    year: 2014,
-    yearRange: '2014',
-    ratingKp: 8.6,
-    ratingImdb: 8.7,
-    country: 'США, Великобритания',
-    genres: ['Фантастика', 'Драма', 'Приключения'],
-    duration: '169 мин',
-    director: 'Кристофер Нолан',
-    cast: 'Мэттью Макконахи, Энн Хэтэуэй, Джессика Честейн, Майкл Кейн, Мэтт Дэймон',
-    poster: 'https://m.media-amazon.com/images/M/MV5BYzdjMDAxZGItMjI2My00ODA1LTlkNzItOWFjMDU5ZDJlYWY3XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    voices: ['Рус. Дублированный', 'HDrezka Studio', 'Гаврилов', 'Eng.Original'],
-    description: 'Когда засуха, пыльные бури и вымирание растений приводят человечество к продовольственному кризису, коллектив исследователей и учёных отправляется сквозь червоточину в путешествие, чтобы превзойти прежние ограничения для космических путешествий человека.'
-  },
-  {
-    id: 'tt15398776',
-    imdbId: 'tt15398776',
-    kpId: '4664634',
-    title: 'Оппенгеймер',
-    originalTitle: 'Oppenheimer',
-    type: 'movie',
-    year: 2023,
-    yearRange: '2023',
-    ratingKp: 8.1,
-    ratingImdb: 8.3,
-    country: 'США, Великобритания',
-    genres: ['Биография', 'Драма', 'История'],
-    duration: '180 мин',
-    director: 'Кристофер Нолан',
-    cast: 'Киллиан Мёрфи, Эмили Блант, Мэтт Дэймон, Роберт Дауни мл., Флоренс Пью',
-    poster: 'https://m.media-amazon.com/images/M/MV5BN2JkMDc5MGQtZjg3YS00NmFiLWIyZmQtZTJmNTM5MjVmYTQ4XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    voices: ['Red Head Sound', 'Рус. Дублированный', 'HDrezka Studio', 'TVShows', 'JASKIER', 'Eng.Original'],
-    description: 'История жизни американского физика-теоретика Роберта Оппенгеймера, который во времена Второй мировой войны руководил Манхэттенским проектом — секретными разработками ядерного оружия.'
-  },
-  {
-    id: 'tt0944947',
-    imdbId: 'tt0944947',
-    kpId: '464963',
-    title: 'Игра престолов',
-    originalTitle: 'Game of Thrones',
-    type: 'series',
-    year: 2011,
-    yearRange: '2011–2019',
-    ratingKp: 9.0,
-    ratingImdb: 9.2,
-    country: 'США, Великобритания',
-    genres: ['Фэнтези', 'Драма', 'Боевик', 'Приключения'],
-    duration: '55 мин / серия',
-    director: 'Дэвид Бениофф, Д.Б. Уайсс',
-    cast: 'Эмилия Кларк, Кит Харингтон, Питер Динклэйдж, Лина Хиди, Николай Костер-Вальдау',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMTNhMDJmNmYtNDQ5OS00ODdlLWE0ZDAtZTgyYTIwNDY3OTU3XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 8,
-    episodesPerSeason: [10, 10, 10, 10, 10, 10, 7, 6],
-    voices: ['LostFilm', 'Рус. Дублированный', 'HDrezka Studio', 'AlexFilm', 'Кубик в кубе', 'Eng.Original'],
-    description: 'К концу подходит время благоденствия, и лето, длившееся почти десятилетие, угасает. Вокруг средоточия власти Семи королевств, Железного трона, зреет заговор, и в это непростое время король решает искать поддержки у друга юности Эддарда Старка.'
-  },
-  {
-    id: 'tt8367814',
-    imdbId: 'tt8367814',
-    kpId: '1143242',
-    title: 'Джентльмены',
-    originalTitle: 'The Gentlemen',
-    type: 'movie',
-    year: 2019,
-    yearRange: '2019',
-    ratingKp: 8.6,
-    ratingImdb: 7.8,
-    country: 'Великобритания, США',
-    genres: ['Криминал', 'Комедия', 'Боевик'],
-    duration: '113 мин',
-    director: 'Гай Ричи',
-    cast: 'Мэттью Макконахи, Чарли Ханнэм, Генри Голдинг, Хью Грант, Колин Фаррелл',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMTlkMmVmYjktYTc2NC00ZGZjLWEyOWUtMjc2MDMwMjQwOTA5XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    voices: ['Рус. Дублированный', 'Кубик в кубе', 'Дмитрий "Goblin" Пучков', 'HDrezka Studio', 'JASKIER', 'Eng.Original'],
-    description: 'Талантливый выпускник Оксфорда, применив уникальный ум и невиданную дерзость, придумал нелегальную схему обогащения с использованием поместья обедневшей английской аристократии.'
-  },
-  {
-    id: 'tt1321510',
-    imdbId: 'tt1321510',
-    kpId: '502838',
-    title: 'Джентльмены (Сериал)',
-    originalTitle: 'The Gentlemen (TV Series)',
-    type: 'series',
-    year: 2024,
-    yearRange: '2024',
-    ratingKp: 7.8,
-    ratingImdb: 8.0,
-    country: 'Великобритания, США',
-    genres: ['Криминал', 'Комедия', 'Боевик'],
-    duration: '50 мин / серия',
-    director: 'Гай Ричи',
-    cast: 'Тео Джеймс, Кая Скоделарио, Джанкарло Эспозито, Винни Джонс',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMjE2ZjI3NTItYmFjOS00YWM3LWI0NDMtN2I4NGI2YjE0M2U5XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1514539079130-25950c84af65?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 1,
-    episodesPerSeason: [8],
-    voices: ['Red Head Sound', 'HDrezka Studio', 'Кубик в кубе', 'LostFilm', 'TVShows', 'Eng.Original'],
-    description: 'Эдди Холстед наследует огромное поместье своего отца и обнаруживает, что земля стала частью гигантской империи по выращиванию марихуаны под управлением легендарного Бобби Гласса.'
-  },
-  {
-    id: 'tt1190634',
-    imdbId: 'tt1190634',
-    kpId: '460586',
-    title: 'Пацаны',
-    originalTitle: 'The Boys',
-    type: 'series',
-    year: 2019,
-    yearRange: '2019–2026',
-    ratingKp: 8.3,
-    ratingImdb: 8.7,
-    country: 'США',
-    genres: ['Фантастика', 'Боевик', 'Комедия', 'Криминал'],
-    duration: '60 мин / серия',
-    director: 'Эрик Крипке',
-    cast: 'Карл Урбан, Джек Куэйд, Энтони Старр, Эрин Мориарти, Дженсен Эклс',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMWJlN2U5MzItNjU4My00NTM2LWFjOWUtOWFiNjg3ZTMxZDY1XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 4,
-    episodesPerSeason: [8, 8, 8, 8],
-    voices: ['Кубик в кубе', 'HDrezka Studio', 'Red Head Sound', 'LostFilm', 'AlexFilm', 'TVShows'],
-    description: 'Действие разворачивается в мире, где существуют супергерои, но за их глянцевым фасадом скрывается мир наркотиков, коррупции и безнаказанности. Против них выступает отряд «Пацанов» во главе с Билли Бутчером.'
-  },
-  {
-    id: 'tt12637874',
-    imdbId: 'tt12637874',
-    kpId: '1392550',
-    title: 'Фоллаут',
-    originalTitle: 'Fallout',
-    type: 'series',
-    year: 2024,
-    yearRange: '2024',
-    ratingKp: 8.0,
-    ratingImdb: 8.4,
-    country: 'США',
-    genres: ['Фантастика', 'Боевик', 'Драма', 'Приключения'],
-    duration: '60 мин / серия',
-    director: 'Джонатан Нолан',
-    cast: 'Элла Пернелл, Уолтон Гоггинс, Аарон Мотен, Кайл Маклахлен',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNjI5M2I0N2ItYjI0MC00NjU1LTk2MzUtNDY1NWI4M2M2YThmXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 1,
-    episodesPerSeason: [8],
-    voices: ['Red Head Sound', 'HDrezka Studio', 'Кубик в кубе', 'LostFilm', 'TVShows', 'JASKIER'],
-    description: 'Спустя 200 лет после ядерного апокалипсиса обитательница комфортабельного подземного Убежища 33 вынуждена выйти на выжженную поверхность Лос-Анджелеса, чтобы спасти своего отца.'
-  },
-  {
-    id: 'tt6263850',
-    imdbId: 'tt6263850',
-    kpId: '1229684',
-    title: 'Дэдпул и Росомаха',
-    originalTitle: 'Deadpool & Wolverine',
-    type: 'movie',
-    year: 2024,
-    yearRange: '2024',
-    ratingKp: 7.5,
-    ratingImdb: 7.7,
-    country: 'США',
-    genres: ['Фантастика', 'Боевик', 'Комедия'],
-    duration: '128 мин',
-    director: 'Шон Леви',
-    cast: 'Райан Рейнольдс, Хью Джекман, Эмма Коррин, Мэттью Макфэдьен',
-    poster: 'https://m.media-amazon.com/images/M/MV5BZTk5ODY0MmQtMzA3Ni00NGY1LThiYzItZThiNjFiNDM4MTM3XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    voices: ['Red Head Sound', 'Рус. Дублированный', 'HDrezka Studio', 'JASKIER', 'Eng.Original'],
-    description: 'Уэйд Уилсон попадает в организацию «Управление временными изменениями», что выдергивает его из спокойной жизни и заставляет объединиться с Росомахой ради спасения своей вселенной.'
-  },
-  {
-    id: 'tt2861424',
-    imdbId: 'tt2861424',
-    kpId: '685246',
-    title: 'Рик и Морти',
-    originalTitle: 'Rick and Morty',
-    type: 'cartoon',
-    year: 2013,
-    yearRange: '2013–2025',
-    ratingKp: 8.9,
-    ratingImdb: 9.1,
-    country: 'США',
-    genres: ['Мультфильмы', 'Фантастика', 'Комедия', 'Приключения'],
-    duration: '23 мин / серия',
-    director: 'Джастин Ройланд, Дэн Хармон',
-    cast: 'Сыендук (озвучка РФ), Иэн Кардони, Гарри Белден',
-    poster: 'https://m.media-amazon.com/images/M/MV5BZjRjOTFkOTktZWUzMi00YzMyLThkMmYtMjEwNmQyNzliYTNmXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 7,
-    episodesPerSeason: [11, 10, 10, 10, 10, 10, 10],
-    voices: ['Сыендук', 'HDrezka Studio', 'TVShows', 'Eng.Original'],
-    description: 'Безумный учёный Рик Санчез переезжает в дом своей дочери Бет и втягивает своего 14-летнего внука Морти в безумные межпространственные приключения по всей мультивселенной.'
-  },
-  {
-    id: 'tt2560140',
-    imdbId: 'tt2560140',
-    kpId: '749374',
-    title: 'Атака титанов',
-    originalTitle: 'Shingeki no Kyojin',
-    type: 'anime',
-    year: 2013,
-    yearRange: '2013–2023',
-    ratingKp: 8.7,
-    ratingImdb: 9.1,
-    country: 'Япония',
-    genres: ['Аниме', 'Боевик', 'Драма', 'Фэнтези'],
-    duration: '24 мин / серия',
-    director: 'Тэцуро Араки',
-    cast: 'Юки Кадзи, Юи Исикава, Марина Иноуэ',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNjY4MDQxZTItM2JjMi00NjM5LTk0MWQtOTBlNTY2YjBiNmFjXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 4,
-    episodesPerSeason: [25, 12, 22, 30],
-    voices: ['Studio Band', 'AniLibria', 'AniDUB', 'SHIZA Project', 'HDrezka Studio', 'Японский + Субтитры'],
-    description: 'Сотни лет назад человечество было почти полностью истреблено гигантскими титанами. Выжившие укрылись за тремя высокими стенами, пока однажды Колоссальный титан не пробил брешь в внешней стене.'
-  },
-  {
-    id: 'tt7366338',
-    imdbId: 'tt7366338',
-    kpId: '1227803',
-    title: 'Чернобыль',
-    originalTitle: 'Chernobyl',
-    type: 'series',
-    year: 2019,
-    yearRange: '2019',
-    ratingKp: 8.8,
-    ratingImdb: 9.3,
-    country: 'США, Великобритания',
-    genres: ['Драма', 'История', 'Триллер'],
-    duration: '65 мин / серия',
-    director: 'Йохан Ренк',
-    cast: 'Джаред Харрис, Стеллан Скарсгард, Эмили Уотсон, Пол Риттер',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNzU0OTI4YTQtNGQ1ZS00ZjA4LTg3MTMtZjkyZWNjN2RiZDJmXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 1,
-    episodesPerSeason: [5],
-    voices: ['Рус. Дублированный', 'HDrezka Studio', 'LostFilm', 'Кубик в кубе', 'AlexFilm', 'Eng.Original'],
-    description: '26 апреля 1986 года на Чернобыльской АЭС происходит взрыв реактора. Академик Валерий Легасов и зампред Совета Министров Борис Щербина пытаются выяснить причины катастрофы и предотвратить ещё большую трагедию.'
-  },
-  {
-    id: 'tt9362722',
-    imdbId: 'tt9362722',
-    kpId: '1219177',
-    title: 'Человек-паук: Паутина вселенных',
-    originalTitle: 'Spider-Man: Across the Spider-Verse',
-    type: 'cartoon',
-    year: 2023,
-    yearRange: '2023',
-    ratingKp: 8.4,
-    ratingImdb: 8.6,
-    country: 'США',
-    genres: ['Мультфильмы', 'Фантастика', 'Боевик', 'Приключения'],
-    duration: '140 мин',
-    director: 'Жуакин Душ Сантуш',
-    cast: 'Шамеик Мур, Хейли Стайнфелд, Оскар Айзек',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMzI0NmVkMjEtYmY4MS00ZDMxLTlkZmEtMzU4MDQxYTMzMjU2XkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1635805737707-575885ab0820?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    voices: ['Red Head Sound', 'Рус. Дублированный', 'HDrezka Studio', 'TVShows', 'JASKIER'],
-    description: 'Майлз Моралес отправляется в приключение по мультивселенной вместе с Гвен Стейси и новой командой Людей-пауков, которым предстоит столкнуться с могущественным злодеем.'
-  },
-  {
-    id: 'tt12343534',
-    imdbId: 'tt12343534',
-    kpId: '1382226',
-    title: 'Магическая битва',
-    originalTitle: 'Jujutsu Kaisen',
-    type: 'anime',
-    year: 2020,
-    yearRange: '2020–2024',
-    ratingKp: 8.3,
-    ratingImdb: 8.5,
-    country: 'Япония',
-    genres: ['Аниме', 'Боевик', 'Фэнтези'],
-    duration: '24 мин / серия',
-    director: 'Пак Сон-ху',
-    cast: 'Дзюнъя Эноки, Юума Утида, Юити Накамура',
-    poster: 'https://m.media-amazon.com/images/M/MV5BNmI1MmYxNWQtY2E5NC00ZTlmLWIzZGEtNzM1YmE3NDA5NzhjXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 2,
-    episodesPerSeason: [24, 23],
-    voices: ['Studio Band', 'AniLibria', 'AniStar', 'Crunchyroll', 'Японский + Субтитры'],
-    description: 'Старшеклассник Юдзи Итадори проглатывает проклятый палец Двуликого Сукуны, чтобы спасти друзей, и становится сосудом для древнего демона. Его принимают в Токийский магический колледж под крыло Сатору Годзё.'
-  },
-  {
-    id: 'tt2442560',
-    imdbId: 'tt2442560',
-    kpId: '716587',
-    title: 'Острые козырьки',
-    originalTitle: 'Peaky Blinders',
-    type: 'series',
-    year: 2013,
-    yearRange: '2013–2022',
-    ratingKp: 8.4,
-    ratingImdb: 8.8,
-    country: 'Великобритания',
-    genres: ['Криминал', 'Драма'],
-    duration: '58 мин / серия',
-    director: 'Стивен Найт',
-    cast: 'Киллиан Мёрфи, Пол Андерсон, Хелен Маккрори, Том Харди, Аннабелль Уоллис',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMThlOWE3MWEtZjM4Ny00M2FiLTkyMmYtZGY3ZTcyMzM5YmNlXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1514539079130-25950c84af65?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 6,
-    episodesPerSeason: [6, 6, 6, 6, 6, 6],
-    voices: ['LostFilm', 'Кубик в кубе', 'HDrezka Studio', 'AlexFilm', 'Рус. Дублированный', 'Eng.Original'],
-    description: 'Бирмингем, 1919 год. Вернувшиеся с полей Первой мировой войны братья Шелби во главе с амбициозным Томасом создают самую влиятельную и жестокую криминальную группировку города, в чьи кепки вшиты бритвенные лезвия.'
-  },
-  {
-    id: 'tt11126994',
-    imdbId: 'tt11126994',
-    kpId: '4445150',
-    title: 'Аркейн',
-    originalTitle: 'Arcane',
-    type: 'cartoon',
-    year: 2021,
-    yearRange: '2021–2024',
-    ratingKp: 8.8,
-    ratingImdb: 9.0,
-    country: 'США, Франция',
-    genres: ['Мультфильмы', 'Фантастика', 'Боевик', 'Драма'],
-    duration: '42 мин / серия',
-    director: 'Паскаль Шаррю, Арно Делорд',
-    cast: 'Хейли Стайнфелд, Элла Пернелл, Кевин Алехандро',
-    poster: 'https://m.media-amazon.com/images/M/MV5BYjA2NzhlMDItNWRmZC00MzRjLWE3ZjAtZjBlZDAwOWY2ODdjXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 2,
-    episodesPerSeason: [9, 9],
-    voices: ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'LostFilm', 'TVShows', 'Eng.Original'],
-    description: 'История двух сестёр — Вай и Паудер (Джинкс), оказавшихся по разные стороны баррикад в противостоянии утопического города Пилтовер и мрачного подземного Зауна.'
-  },
-  {
-    id: 'tt0993846',
-    imdbId: 'tt0993846',
-    kpId: '462682',
-    title: 'Волк с Уолл-стрит',
-    originalTitle: 'The Wolf of Wall Street',
-    type: 'movie',
-    year: 2013,
-    yearRange: '2013',
-    ratingKp: 8.0,
-    ratingImdb: 8.2,
-    country: 'США',
-    genres: ['Биография', 'Криминал', 'Комедия', 'Драма'],
-    duration: '180 мин',
-    director: 'Мартин Скорсезе',
-    cast: 'Леонардо ДиКаприо, Джона Хилл, Марго Робби, Мэттью Макконахи',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMjIxMjgxNTk0MF5BMl5BanBnXkFtZTgwNjIyOTg2MDE@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    voices: ['Рус. Дублированный', 'Кубик в кубе', 'HDrezka Studio', 'JASKIER', 'Дмитрий "Goblin" Пучков', 'Eng.Original'],
-    description: '1987 год. Джордан Белфорт становится брокером в успешном инвестиционном банке, а вскоре открывает собственную фирму Stratton Oakmont, превращая свою жизнь в бесконечный праздник больших денег.'
-  },
-  {
-    id: 'tt10919420',
-    imdbId: 'tt10919420',
-    kpId: '1309325',
-    title: 'Игра в кальмара',
-    originalTitle: 'Squid Game',
-    type: 'series',
-    year: 2021,
-    yearRange: '2021–2025',
-    ratingKp: 7.6,
-    ratingImdb: 8.0,
-    country: 'Южная Корея',
-    genres: ['Триллер', 'Драма', 'Боевик'],
-    duration: '55 мин / серия',
-    director: 'Хван Дон-хёк',
-    cast: 'Ли Джон-джэ, Пак Хэ-су, Ви Ха-джун, Чон Хо-ён',
-    poster: 'https://m.media-amazon.com/images/M/MV5BYTU3ZDVhNmMtMDVlNC00MDc0LTgwNDMtYWE5MTI2ZGI4YWIwXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1400&q=80',
-    isNew: true,
-    isPopular: true,
-    seasonsCount: 2,
-    episodesPerSeason: [9, 7],
-    voices: ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'TVShows', 'LostFilm', 'Корейский + Субтитры'],
-    description: 'Из-за нужды в деньгах сотни людей, разорившихся и погрязших в долгах, принимают странное приглашение поучаствовать в детских играх на выживание с призовым фондом 45,6 млрд вон.'
-  },
-  {
-    id: 'tt1375666',
-    imdbId: 'tt1375666',
-    kpId: '447301',
-    title: 'Начало',
-    originalTitle: 'Inception',
-    type: 'movie',
-    year: 2010,
-    yearRange: '2010',
-    ratingKp: 8.7,
-    ratingImdb: 8.8,
-    country: 'США, Великобритания',
-    genres: ['Фантастика', 'Боевик', 'Триллер'],
-    duration: '148 мин',
-    director: 'Кристофер Нолан',
-    cast: 'Леонардо ДиКаприо, Джозеф Гордон-Левитт, Том Харди, Киллиан Мёрфи, Марион Котийяр',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMjAxMzY3NjcxNF5BMl5BanBnXkFtZTcwNTI5OTM0Mw@@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    voices: ['Рус. Дублированный', 'HDrezka Studio', 'Гаврилов', 'Ю. Сербин', 'Eng.Original'],
-    description: 'Кобб — талантливый вор, лучший из лучших в опасном искусстве извлечения: он крадёт ценные секреты из глубин подсознания во время сна, когда человеческий разум наиболее уязвим.'
-  },
-  {
-    id: 'tt1865718',
-    imdbId: 'tt1865718',
-    kpId: '591929',
-    title: 'Гравити Фолз',
-    originalTitle: 'Gravity Falls',
-    type: 'cartoon',
-    year: 2012,
-    yearRange: '2012–2016',
-    ratingKp: 9.0,
-    ratingImdb: 8.9,
-    country: 'США',
-    genres: ['Мультфильмы', 'Детектив', 'Комедия', 'Приключения', 'Фэнтези'],
-    duration: '22 мин / серия',
-    director: 'Алекс Хирш',
-    cast: 'Джейсон Риттер, Кристен Шаал, Алекс Хирш',
-    poster: 'https://m.media-amazon.com/images/M/MV5BMTEzNDc3MDQ2NzNeQTJeQWpwZ15BbWU4MDYzMzUwMDIx._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 2,
-    episodesPerSeason: [20, 20],
-    voices: ['Рус. Дублированный', 'Сыендук', 'HDrezka Studio', 'Eng.Original'],
-    description: 'Близнецы Диппер и Мэйбл Пайнс отправляются на летние каникулы в тихий городок Гравити Фолз к своему двоюродному дедушке Стэну, где находят таинственный Дневник №3.'
-  },
-  {
-    id: 'tt0877057',
-    imdbId: 'tt0877057',
-    kpId: '406148',
-    title: 'Тетрадь смерти',
-    originalTitle: 'Death Note',
-    type: 'anime',
-    year: 2006,
-    yearRange: '2006–2007',
-    ratingKp: 8.6,
-    ratingImdb: 8.9,
-    country: 'Япония',
-    genres: ['Аниме', 'Триллер', 'Детектив', 'Фэнтези'],
-    duration: '23 мин / серия',
-    director: 'Тэцуро Араки',
-    cast: 'Мамору Мияно, Каппэй Ямагути',
-    poster: 'https://m.media-amazon.com/images/M/MV5BYTgyZDhmMTEtZDFhNi00MTc4LTg3NjUtYWJlNGE5Mzk2NzMxXkEyXkFqcGc@._V1_FMjpg_UX600_.jpg',
-    backdrop: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1400&q=80',
-    isNew: false,
-    isPopular: true,
-    seasonsCount: 1,
-    episodesPerSeason: [37],
-    voices: ['Рус. Дублированный (2x2)', 'AniDUB', 'AniLibria', 'Studio Band', 'Японский + Субтитры'],
-    description: 'Лучшему ученику Японии Ягами Лайту в руки попадает Тетрадь смерти бога синигами Рюка. Каждый человек, чьё имя будет записано в эту тетрадь, умирает.'
-  }
-];
 
 const searchCache = new Map();
 const streamCache = new Map();
@@ -1375,23 +813,42 @@ function ensureDataDir() {
   } catch (e) {}
 }
 
-function loadOrCreateAuthSecret() {
-  if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
-  ensureDataDir();
+const DATABASE_URL = process.env.DATABASE_URL || '';
+
+function buildAuthSecrets() {
+  const secrets = [];
+  const addSecret = s => {
+    const val = String(s || '').trim();
+    if (val && !secrets.includes(val)) secrets.push(val);
+  };
+
+  if (process.env.AUTH_SECRET) {
+    addSecret(process.env.AUTH_SECRET);
+  } else if (DATABASE_URL) {
+    addSecret(crypto.createHash('sha256').update('spbguka_jwt_v2_' + DATABASE_URL).digest('hex'));
+  } else {
+    const stableAnchor = process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_HOSTNAME || 'spbguka-cinema-persistent-salt-v2';
+    addSecret(crypto.createHash('sha256').update(`${stableAnchor}::spbguka_hmac_v2`).digest('hex'));
+  }
+
+  // Compatibility with any previously persisted .auth_secret on disk
   try {
     if (fs.existsSync(SECRET_FILE)) {
-      const saved = fs.readFileSync(SECRET_FILE, 'utf8').trim();
-      if (saved.length >= 32) return saved;
+      const legacySaved = fs.readFileSync(SECRET_FILE, 'utf8').trim();
+      if (legacySaved.length >= 16) addSecret(legacySaved);
     }
-    const generated = crypto.randomBytes(32).toString('hex');
-    fs.writeFileSync(SECRET_FILE, generated, 'utf8');
-    return generated;
-  } catch (e) {
-    return crypto.createHash('sha256').update(__dirname + '_spbguka_secret').digest('hex');
-  }
+  } catch (e) {}
+
+  return secrets;
 }
 
-const AUTH_SECRET = loadOrCreateAuthSecret();
+const AUTH_SECRETS = buildAuthSecrets();
+let ACTIVE_AUTH_SECRET = AUTH_SECRETS[0];
+
+function registerVerificationSecret(secret) {
+  const val = String(secret || '').trim();
+  if (val && !AUTH_SECRETS.includes(val)) AUTH_SECRETS.push(val);
+}
 
 function loadAccountsDb() {
   ensureDataDir();
@@ -1457,13 +914,14 @@ function fromBase64Url(str) {
   return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
 }
 
-function signAuthToken(usernameLower) {
+function signAuthToken(usernameLower, displayUsername = '') {
   const payload = {
     u: usernameLower,
-    exp: Date.now() + 90 * 24 * 60 * 60 * 1000
+    n: displayUsername || usernameLower,
+    exp: Date.now() + 365 * 24 * 60 * 60 * 1000
   };
   const body = toBase64Url(JSON.stringify(payload));
-  const sig = toBase64Url(crypto.createHmac('sha256', AUTH_SECRET).update(body).digest());
+  const sig = toBase64Url(crypto.createHmac('sha256', ACTIVE_AUTH_SECRET).update(body).digest());
   return `${body}.${sig}`;
 }
 
@@ -1471,14 +929,25 @@ function verifyAuthToken(token) {
   if (!token || typeof token !== 'string' || !token.includes('.')) return null;
   const [body, sig] = token.split('.');
   if (!body || !sig) return null;
-  const expectedSig = toBase64Url(crypto.createHmac('sha256', AUTH_SECRET).update(body).digest());
   const sigBuf = Buffer.from(sig);
-  const expBuf = Buffer.from(expectedSig);
-  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
+  let verified = false;
+  for (const secret of AUTH_SECRETS) {
+    const expectedSig = toBase64Url(crypto.createHmac('sha256', secret).update(body).digest());
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)) {
+      verified = true;
+      break;
+    }
+  }
+  if (!verified) return null;
   try {
     const payload = JSON.parse(fromBase64Url(body).toString('utf8'));
     if (!payload.u || !payload.exp || payload.exp < Date.now()) return null;
-    return payload.u;
+    return {
+      usernameLower: payload.u,
+      username: payload.n || payload.u,
+      exp: payload.exp
+    };
   } catch (e) {
     return null;
   }
@@ -1499,7 +968,6 @@ function getAuthTokenFromReq(req) {
   return '';
 }
 
-const DATABASE_URL = process.env.DATABASE_URL || '';
 const pgPool = DATABASE_URL
   ? new Pool({
       connectionString: DATABASE_URL,
@@ -1509,8 +977,14 @@ const pgPool = DATABASE_URL
     })
   : null;
 
+let dbInitPromise = null;
+let dbReady = !pgPool;
+
 async function initDatabase() {
-  if (!pgPool) return;
+  if (!pgPool) {
+    dbReady = true;
+    return true;
+  }
   try {
     await pgPool.query(`
       CREATE TABLE IF NOT EXISTS spbguka_users (
@@ -1523,51 +997,95 @@ async function initDatabase() {
         updated_at BIGINT NOT NULL
       );
     `);
-    console.log('PostgreSQL database ready (spbguka_users)');
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS spbguka_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const cfgRes = await pgPool.query('SELECT value FROM spbguka_config WHERE key = $1', ['auth_secret']);
+    if (cfgRes.rows.length > 0 && cfgRes.rows[0].value) {
+      registerVerificationSecret(cfgRes.rows[0].value);
+    } else {
+      await pgPool.query(
+        'INSERT INTO spbguka_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING',
+        ['auth_secret', ACTIVE_AUTH_SECRET]
+      );
+    }
+    dbReady = true;
+    console.log('PostgreSQL database ready (spbguka_users, spbguka_config)');
+    return true;
   } catch (e) {
     console.error('PostgreSQL init error:', e.message);
+    dbReady = false;
+    return false;
+  }
+}
+
+async function ensureDbReady() {
+  if (!pgPool) return true;
+  if (dbReady) return true;
+  if (!dbInitPromise) {
+    dbInitPromise = initDatabase().finally(() => { dbInitPromise = null; });
+  }
+  return await dbInitPromise;
+}
+
+async function withPgRetry(fn) {
+  await ensureDbReady();
+  try {
+    return await fn();
+  } catch (err) {
+    await new Promise(r => setTimeout(r, 250));
+    dbReady = false;
+    await ensureDbReady();
+    return await fn();
   }
 }
 
 async function findUserByKey(key) {
   if (pgPool) {
-    const r = await pgPool.query(
-      'SELECT username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at FROM spbguka_users WHERE username_lower = $1',
-      [key]
-    );
-    if (r.rows.length === 0) return null;
-    const row = r.rows[0];
-    return {
-      usernameLower: row.username_lower,
-      username: row.username,
-      passwordHash: row.password_hash,
-      history: Array.isArray(row.history_json) ? row.history_json : [],
-      favorites: Array.isArray(row.favorites_json) ? row.favorites_json : [],
-      createdAt: Number(row.created_at) || Date.now(),
-      updatedAt: Number(row.updated_at) || Date.now()
-    };
+    return await withPgRetry(async () => {
+      const r = await pgPool.query(
+        'SELECT username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at FROM spbguka_users WHERE username_lower = $1',
+        [key]
+      );
+      if (r.rows.length === 0) return null;
+      const row = r.rows[0];
+      return {
+        usernameLower: row.username_lower,
+        username: row.username,
+        passwordHash: row.password_hash,
+        history: Array.isArray(row.history_json) ? row.history_json : [],
+        favorites: Array.isArray(row.favorites_json) ? row.favorites_json : [],
+        createdAt: Number(row.created_at) || Date.now(),
+        updatedAt: Number(row.updated_at) || Date.now()
+      };
+    });
   }
   return accountsDb.users[key] || null;
 }
 
 async function createUserRecord(user) {
   if (pgPool) {
-    const r = await pgPool.query(
-      `INSERT INTO spbguka_users (username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
-       ON CONFLICT (username_lower) DO NOTHING
-       RETURNING username_lower`,
-      [
-        user.usernameLower,
-        user.username,
-        user.passwordHash,
-        JSON.stringify(user.history || []),
-        JSON.stringify(user.favorites || []),
-        user.createdAt,
-        user.updatedAt
-      ]
-    );
-    return r.rows.length > 0;
+    return await withPgRetry(async () => {
+      const r = await pgPool.query(
+        `INSERT INTO spbguka_users (username_lower, username, password_hash, history_json, favorites_json, created_at, updated_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
+         ON CONFLICT (username_lower) DO NOTHING
+         RETURNING username_lower`,
+        [
+          user.usernameLower,
+          user.username,
+          user.passwordHash,
+          JSON.stringify(user.history || []),
+          JSON.stringify(user.favorites || []),
+          user.createdAt,
+          user.updatedAt
+        ]
+      );
+      return r.rows.length > 0;
+    });
   }
   if (accountsDb.users[user.usernameLower]) return false;
   accountsDb.users[user.usernameLower] = user;
@@ -1577,16 +1095,17 @@ async function createUserRecord(user) {
 
 async function saveUserProgress(user, immediate = false) {
   if (pgPool) {
-    await pgPool.query(
-      'UPDATE spbguka_users SET history_json = $2::jsonb, favorites_json = $3::jsonb, updated_at = $4 WHERE username_lower = $1',
-      [
-        user.usernameLower,
-        JSON.stringify(user.history || []),
-        JSON.stringify(user.favorites || []),
-        user.updatedAt
-      ]
-    );
-    return;
+    return await withPgRetry(async () => {
+      await pgPool.query(
+        'UPDATE spbguka_users SET history_json = $2::jsonb, favorites_json = $3::jsonb, updated_at = $4 WHERE username_lower = $1',
+        [
+          user.usernameLower,
+          JSON.stringify(user.history || []),
+          JSON.stringify(user.favorites || []),
+          user.updatedAt
+        ]
+      );
+    });
   }
   accountsDb.users[user.usernameLower] = user;
   scheduleSaveAccounts(immediate);
@@ -1594,13 +1113,41 @@ async function saveUserProgress(user, immediate = false) {
 
 async function getAuthenticatedUser(req) {
   const token = getAuthTokenFromReq(req);
-  const usernameLower = verifyAuthToken(token);
-  if (!usernameLower) return null;
+  const tokenData = verifyAuthToken(token);
+  if (!tokenData) return { status: 'invalid' };
   try {
-    return await findUserByKey(usernameLower);
+    let user = await findUserByKey(tokenData.usernameLower);
+    if (!user && !pgPool) {
+      // Ephemeral filesystem wipe recovery (e.g. Render Free sleep without Postgres):
+      // token HMAC signature is valid, so restore the user shell seamlessly
+      user = {
+        username: tokenData.username || tokenData.usernameLower,
+        usernameLower: tokenData.usernameLower,
+        passwordHash: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        history: [],
+        favorites: []
+      };
+      accountsDb.users[tokenData.usernameLower] = user;
+      scheduleSaveAccounts(true);
+    }
+    if (!user) return { status: 'invalid' };
+    return { status: 'ok', user, tokenData };
   } catch (e) {
+    return { status: 'db_error', error: e };
+  }
+}
+
+async function requireAuth(req, res, invalidMessage = 'Требуется вход в аккаунт') {
+  const auth = await getAuthenticatedUser(req);
+  if (auth.status === 'ok') return auth.user;
+  if (auth.status === 'db_error') {
+    sendJson(res, 503, { error: 'База данных просыпается, повторите через секунду', code: 'DB_UNAVAILABLE' }, req);
     return null;
   }
+  sendJson(res, 401, { error: invalidMessage, code: 'INVALID_TOKEN' }, req);
+  return null;
 }
 
 // --- Live Daily 10:00 AM Catalog & Ratings Updater ---
@@ -1628,20 +1175,28 @@ const GENRE_RU_MAP = {
 
 let liveCatalog = SEED_CATALOG.map(x => ({
   ...x,
-  isNew: x.year >= new Date().getFullYear() - 1
+  isNew: Boolean(x.isNew || x.year >= new Date().getFullYear() - 2 || /2024|2025|2026/.test(String(x.yearRange || '')))
 }));
-let lastCatalogRefreshAt = 0;
+let lastCatalogRefreshAt = Date.now();
 
 function parseReleaseYear(releaseInfo) {
   const match = String(releaseInfo || '').match(/(\d{4})/);
   return match ? Number(match[1]) : new Date().getFullYear();
 }
 
-async function fetchCinemetaTop(mediaType) {
+function isLikelyAnimeMeta(meta) {
+  const genres = Array.isArray(meta.genres) ? meta.genres : [];
+  if (genres.includes('Anime')) return true;
+  if (!genres.includes('Animation')) return false;
+  const text = `${meta.country || ''} ${meta.language || ''} ${meta.name || ''} ${meta.description || ''}`;
+  return /japan|japanese|anime|manga|tokyo|kyoto|crunchyroll|shonen|isekai/i.test(text);
+}
+
+async function fetchCinemetaCatalog(mediaType, catalogName = 'top') {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 7000);
-    const res = await fetch(`https://v3-cinemeta.strem.io/catalog/${mediaType}/top.json`, {
+    const res = await fetch(`https://v3-cinemeta.strem.io/catalog/${mediaType}/${catalogName}.json`, {
       signal: controller.signal
     });
     clearTimeout(timeout);
@@ -1655,16 +1210,20 @@ async function fetchCinemetaTop(mediaType) {
 
 async function refreshLiveCatalog() {
   const currentYear = new Date().getFullYear();
-  const newThreshold = currentYear - 1; // e.g., 2025-2026 in 2026
+  const newThreshold = currentYear - 2; // e.g., 2024-2026 in 2026
 
   try {
-    const [movieMetas, seriesMetas] = await Promise.all([
-      fetchCinemetaTop('movie'),
-      fetchCinemetaTop('series')
+    const [movieTop, seriesTop, movieRated, seriesRated] = await Promise.all([
+      fetchCinemetaCatalog('movie', 'top'),
+      fetchCinemetaCatalog('series', 'top'),
+      fetchCinemetaCatalog('movie', 'imdbRating'),
+      fetchCinemetaCatalog('series', 'imdbRating')
     ]);
     const allMetas = [
-      ...seriesMetas.map(m => ({ ...m, _kind: 'series' })),
-      ...movieMetas.map(m => ({ ...m, _kind: 'movie' }))
+      ...seriesTop.map(m => ({ ...m, _kind: 'series' })),
+      ...movieTop.map(m => ({ ...m, _kind: 'movie' })),
+      ...seriesRated.map(m => ({ ...m, _kind: 'series' })),
+      ...movieRated.map(m => ({ ...m, _kind: 'movie' }))
     ];
 
     if (allMetas.length === 0) {
@@ -1696,7 +1255,7 @@ async function refreshLiveCatalog() {
         ...item,
         ratingImdb: refreshedRating,
         yearRange: refreshedYearRange,
-        isNew: item.year >= newThreshold || /2025|2026/.test(String(refreshedYearRange || ''))
+        isNew: Boolean(item.isNew || item.year >= newThreshold || /2024|2025|2026/.test(String(refreshedYearRange || '')))
       };
     });
 
@@ -1720,11 +1279,18 @@ async function refreshLiveCatalog() {
       if (ruGenres.length === 0) ruGenres.push(m._kind === 'series' ? 'Драма' : 'Кино');
 
       const isAnim = (m.genres || []).includes('Animation');
-      const resolvedType = isAnim ? 'cartoon' : m._kind;
+      const isAnime = isLikelyAnimeMeta(m);
+      const resolvedType = isAnime ? 'anime' : (isAnim ? 'cartoon' : m._kind);
+      if (isAnime && !ruGenres.includes('Аниме')) {
+        ruGenres.unshift('Аниме');
+      }
       const isRecent = year >= newThreshold;
 
-      // Prioritize current new releases (2025-2026) and high-rated current hits
-      if (!isRecent && candidateNew.length >= 16) continue;
+      // Prioritize current new releases (2024-2026) and high-rated current hits
+      if (!isRecent && candidateNew.length >= 40) continue;
+
+      const metahubPosterUrl = `https://images.metahub.space/poster/medium/${imdbId}/img`;
+      const metahubBgUrl = `https://images.metahub.space/background/medium/${imdbId}/img`;
 
       candidateNew.push({
         id: imdbId,
@@ -1733,28 +1299,31 @@ async function refreshLiveCatalog() {
         title: m.name || imdbId,
         originalTitle: m.name || '',
         type: resolvedType,
+        animeFormat: resolvedType === 'anime' ? (m._kind === 'movie' ? 'movie' : 'series') : undefined,
         year,
         yearRange: m.releaseInfo ? String(m.releaseInfo) : String(year),
         ratingKp,
         ratingImdb,
-        country: 'США / Мир',
-        genres: ruGenres,
-        duration: resolvedType === 'series' ? '45 мин / серия' : '115 мин',
+        country: isAnime ? 'Япония' : 'США / Мир',
+        genres: ruGenres.slice(0, 4),
+        duration: m._kind === 'series' ? '45 мин / серия' : '115 мин',
         director: Array.isArray(m.director) && m.director.length ? m.director.join(', ') : 'По данным IMDb',
         cast: Array.isArray(m.cast) && m.cast.length ? m.cast.slice(0, 5).join(', ') : 'В ролях',
-        poster: m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80',
-        backdrop: m.background || m.poster || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=1400&q=80',
+        poster: m.poster || metahubPosterUrl,
+        backdrop: m.background || m.poster || metahubBgUrl,
         isNew: isRecent,
         isPopular: true,
-        seasonsCount: resolvedType === 'series' ? 1 : 1,
-        episodesPerSeason: resolvedType === 'series' ? [10] : [1],
-        voices: resolvedType === 'series'
-          ? ['HDrezka Studio', 'LostFilm', 'Red Head Sound', 'Кубик в кубе', 'Рус. Дублированный', 'Eng.Original']
-          : ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'JASKIER', 'Eng.Original'],
+        seasonsCount: m._kind === 'series' ? 1 : undefined,
+        episodesPerSeason: m._kind === 'series' ? [10] : undefined,
+        voices: resolvedType === 'anime'
+          ? ['AniLibria', 'Studio Band', 'AniDUB', 'HDrezka Studio', 'Японский + Субтитры']
+          : (m._kind === 'series'
+              ? ['HDrezka Studio', 'LostFilm', 'Red Head Sound', 'Кубик в кубе', 'Рус. Дублированный', 'Eng.Original']
+              : ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'JASKIER', 'Eng.Original']),
         description: m.description || `Новинка ${year} года (${m.name}). Смотреть онлайн в HD 1080p без рекламы.`
       });
 
-      if (candidateNew.length >= 24) break;
+      if (candidateNew.length >= 70) break;
     }
 
     // Sort fresh releases first, then enrich Russian titles/KP IDs via Wikidata
@@ -1765,11 +1334,11 @@ async function refreshLiveCatalog() {
       enrichedBatches.push(...batch);
     }
 
-    liveCatalog = [...enrichedBatches, ...updatedSeed];
+    liveCatalog = [...updatedSeed, ...enrichedBatches];
     detailsCache.clear();
     searchCache.clear();
     lastCatalogRefreshAt = Date.now();
-    console.log(`Catalog refreshed: ${liveCatalog.length} items (${enrichedBatches.filter(x => x.isNew).length} new ${newThreshold}-${currentYear} releases)`);
+    console.log(`Catalog refreshed: ${liveCatalog.length} items (${liveCatalog.filter(x => x.isNew).length} new ${newThreshold}-${currentYear} releases, ${liveCatalog.filter(x => x.type === 'anime').length} anime)`);
   } catch (e) {
     console.error('Catalog refresh failed:', e.message);
   }
@@ -1908,9 +1477,13 @@ function publicUserPayload(user) {
   };
 }
 
-function setAuthCookie(res, token) {
-  const maxAge = 90 * 24 * 60 * 60;
-  res.setHeader('Set-Cookie', `spbguka_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax`);
+function setAuthCookie(req, res, token) {
+  const maxAge = 365 * 24 * 60 * 60;
+  const isHttps = req?.headers?.['x-forwarded-proto'] === 'https' || Boolean(req?.socket?.encrypted);
+  res.setHeader(
+    'Set-Cookie',
+    `spbguka_token=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${isHttps ? '; Secure' : ''}`
+  );
 }
 
 // --- Watch Party / Lobby System (Max 20 Participants, Host Sync, Optional Chat, Live Server Presence) ---
@@ -2273,11 +1846,11 @@ const server = http.createServer(async (req, res) => {
       if (!created) {
         return sendJson(res, 409, { error: 'Этот никнейм уже занят. Выберите другой или войдите.' }, req);
       }
-      const token = signAuthToken(key);
-      setAuthCookie(res, token);
+      const token = signAuthToken(key, user.username);
+      setAuthCookie(req, res, token);
       return sendJson(res, 201, { token, user: publicUserPayload(user), db: pgPool ? 'postgres' : 'local-file' }, req);
     } catch (e) {
-      return sendJson(res, 400, { error: 'Некорректные данные регистрации' }, req);
+      return sendJson(res, 500, { error: 'Ошибка базы данных при регистрации', code: 'DB_UNAVAILABLE' }, req);
     }
   }
 
@@ -2299,32 +1872,31 @@ const server = http.createServer(async (req, res) => {
       }
       user.updatedAt = Date.now();
       await saveUserProgress(user, true);
-      const token = signAuthToken(key);
-      setAuthCookie(res, token);
+      const token = signAuthToken(key, user.username);
+      setAuthCookie(req, res, token);
       return sendJson(res, 200, { token, user: publicUserPayload(user), db: pgPool ? 'postgres' : 'local-file' }, req);
     } catch (e) {
-      return sendJson(res, 400, { error: 'Ошибка входа' }, req);
+      return sendJson(res, 500, { error: 'Ошибка входа или базы данных', code: 'DB_UNAVAILABLE' }, req);
     }
   }
 
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
-    res.setHeader('Set-Cookie', 'spbguka_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+    const isHttps = req?.headers?.['x-forwarded-proto'] === 'https' || Boolean(req?.socket?.encrypted);
+    res.setHeader('Set-Cookie', `spbguka_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${isHttps ? '; Secure' : ''}`);
     return sendJson(res, 200, { ok: true }, req);
   }
 
   if ((pathname === '/api/auth/me' || pathname === '/api/account/sync') && req.method === 'GET') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
-    }
-    return sendJson(res, 200, { user: publicUserPayload(user) }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
+    const refreshedToken = signAuthToken(user.usernameLower, user.username);
+    setAuthCookie(req, res, refreshedToken);
+    return sendJson(res, 200, { user: publicUserPayload(user), refreshedToken }, req);
   }
 
   if (pathname === '/api/account/sync' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
-    }
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       const mode = body.mode === 'replace' ? 'replace' : 'merge';
@@ -2340,18 +1912,18 @@ const server = http.createServer(async (req, res) => {
       }
       user.updatedAt = Date.now();
       await saveUserProgress(user, false);
-      return sendJson(res, 200, { ok: true, user: publicUserPayload(user) }, req);
+      const refreshedToken = signAuthToken(user.usernameLower, user.username);
+      setAuthCookie(req, res, refreshedToken);
+      return sendJson(res, 200, { ok: true, user: publicUserPayload(user), refreshedToken }, req);
     } catch (e) {
-      return sendJson(res, 400, { error: 'Ошибка синхронизации' }, req);
+      return sendJson(res, 500, { error: 'Ошибка синхронизации с базой данных', code: 'DB_UNAVAILABLE' }, req);
     }
   }
 
   // --- Watch Party / Lobby Routes ---
   if (pathname === '/api/lobby/events' && req.method === 'GET') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      return sendJson(res, 401, { error: 'Войдите в аккаунт для подключения к лобби' }, req);
-    }
+    const user = await requireAuth(req, res, 'Войдите в аккаунт для подключения к лобби');
+    if (!user) return;
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -2391,8 +1963,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/users' && req.method === 'GET') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     touchUserPresence(user);
     const q = parsedUrl.searchParams.get('q') || '';
     const lobby = getUserLobby(user.usernameLower);
@@ -2412,8 +1984,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/state' && req.method === 'GET') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     touchUserPresence(user);
     const lobby = getUserLobby(user.usernameLower);
     return sendJson(res, 200, {
@@ -2425,8 +1997,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/create' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Войдите в аккаунт, чтобы создать лобби' }, req);
+    const user = await requireAuth(req, res, 'Войдите в аккаунт, чтобы создать лобби');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       touchUserPresence(user);
@@ -2486,8 +2058,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/join' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Войдите в аккаунт, чтобы зайти в лобби' }, req);
+    const user = await requireAuth(req, res, 'Войдите в аккаунт, чтобы зайти в лобби');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       touchUserPresence(user);
@@ -2551,8 +2123,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/leave' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     const lobby = getUserLobby(user.usernameLower);
     if (lobby) {
       removeMemberFromLobby(lobby, user.usernameLower, 'вышел из лобби');
@@ -2561,8 +2133,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/close' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     const lobby = getUserLobby(user.usernameLower);
     if (!lobby) return sendJson(res, 404, { error: 'Вы не в лобби' }, req);
     if (lobby.hostLower !== user.usernameLower) {
@@ -2573,8 +2145,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/invite' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       touchUserPresence(user);
@@ -2629,8 +2201,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/decline' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       const code = String(body.lobbyId || '').trim().toUpperCase();
@@ -2646,8 +2218,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/kick' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       const lobby = getUserLobby(user.usernameLower);
@@ -2671,8 +2243,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/transfer-host' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       const lobby = getUserLobby(user.usernameLower);
@@ -2704,8 +2276,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/sync' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       touchUserPresence(user);
@@ -2745,8 +2317,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/lobby/chat' && req.method === 'POST') {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Требуется вход в аккаунт' }, req);
+    const user = await requireAuth(req, res, 'Требуется вход в аккаунт');
+    if (!user) return;
     try {
       const body = await readJsonBody(req);
       touchUserPresence(user);
@@ -2785,7 +2357,7 @@ const server = http.createServer(async (req, res) => {
     const genre = parsedUrl.searchParams.get('genre') || 'all';
     const year = parsedUrl.searchParams.get('year') || 'all';
     const sort = parsedUrl.searchParams.get('sort') || 'popular';
-    const newThreshold = new Date().getFullYear() - 1;
+    const newThreshold = new Date().getFullYear() - 2;
 
     let list = [...liveCatalog];
 
@@ -2904,7 +2476,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', async () => {
   console.log(`SPBGUKA (HD VideoBox Web) server running at http://0.0.0.0:${PORT}`);
-  await initDatabase();
+  await ensureDbReady();
   setTimeout(() => refreshLiveCatalog(), 1000);
   scheduleDaily10AmRefresh();
 });

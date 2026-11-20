@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#09090b" />
+  <meta name="theme-color" content="#000000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="СПБГУКА" />
@@ -20,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=16" />
+  <link rel="stylesheet" href="/styles.css?v=20" />
 </head>
 <body>
   <!-- Top Header -->
@@ -204,6 +204,18 @@
 
     <!-- Main Content -->
     <main class="main-content">
+      <!-- iOS Mobile Quick Category Strip -->
+      <div id="mobileCategoryStrip" class="mobile-category-strip" role="tablist" aria-label="Категории">
+        <button class="mob-cat-pill active" data-category="all" type="button">Все</button>
+        <button class="mob-cat-pill" data-category="new" type="button">Новинки</button>
+        <button class="mob-cat-pill" data-category="movie" type="button">Фильмы</button>
+        <button class="mob-cat-pill" data-category="series" type="button">Сериалы</button>
+        <button class="mob-cat-pill" data-category="anime" type="button">Аниме</button>
+        <button class="mob-cat-pill" data-category="cartoon" type="button">Мульты</button>
+        <button class="mob-cat-pill" data-category="popular" type="button">Популярное</button>
+        <button class="mob-cat-pill" data-category="history" type="button">История</button>
+      </div>
+
       <!-- Featured Hero Spotlight -->
       <section id="heroBanner" class="hero-banner hidden">
         <div id="heroBackdrop" class="hero-backdrop"></div>
@@ -262,6 +274,27 @@
         <div id="newReleasesList" class="releases-list"></div>
       </section>
 
+      <!-- Top Anime Shelf on Home -->
+      <section id="animeShelf" class="releases-shelf hidden">
+        <div class="continue-shelf-head">
+          <div class="continue-shelf-title">
+            <span class="continue-dot anime-dot"></span>
+            <h2>Топ аниме</h2>
+          </div>
+          <button id="allAnimeBtn" class="btn-ghost btn-xs focusable" type="button">Все аниме →</button>
+        </div>
+        <div id="animeShelfList" class="releases-list"></div>
+      </section>
+
+      <!-- Anime Sub-Filter Segmented Control (visible on Anime tab) -->
+      <div id="animeSubBar" class="anime-sub-bar hidden" role="tablist" aria-label="Фильтр аниме">
+        <button class="anime-sub-btn active focusable" data-anime-sub="all" type="button">Все аниме</button>
+        <button class="anime-sub-btn focusable" data-anime-sub="top" type="button">Топ рейтинга</button>
+        <button class="anime-sub-btn focusable" data-anime-sub="new" type="button">Новинки</button>
+        <button class="anime-sub-btn focusable" data-anime-sub="series" type="button">Сериалы</button>
+        <button class="anime-sub-btn focusable" data-anime-sub="movie" type="button">Фильмы</button>
+      </div>
+
       <!-- Filter Strip -->
       <section class="filter-bar">
         <div class="genre-scroll" id="genrePills">
@@ -294,7 +327,12 @@
             <option value="title">По алфавиту</option>
           </select>
 
-          <button id="resetFiltersBtn" class="btn-ghost btn-sm hidden focusable" type="button">Сбросить фильтры</button>
+          <button id="randomPickBtn" class="btn-ghost btn-sm random-pick-btn focusable" type="button" title="Случайный фильм, сериал или аниме">
+            <span>🎲</span>
+            <span>Случайный</span>
+          </button>
+
+          <button id="resetFiltersBtn" class="btn-ghost btn-sm hidden focusable" type="button">Сбросить</button>
         </div>
       </section>
 
@@ -330,40 +368,39 @@
     </main>
   </div>
 
-  <!-- Mobile Bottom Navigation Bar (Android / iPhone) -->
+  <!-- Mobile Bottom Navigation Bar (iOS Tab Dock) -->
   <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="Навигация">
     <button class="mob-nav-item active" data-category="all" type="button">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
       </svg>
       <span>Главное</span>
     </button>
-    <button class="mob-nav-item" data-category="movie" type="button">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <rect x="2" y="2" width="20" height="20" rx="2.18"></rect>
-        <line x1="7" y1="2" x2="7" y2="22"></line>
-        <line x1="17" y1="2" x2="17" y2="22"></line>
+    <button class="mob-nav-item" data-category="new" type="button">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <polyline points="12 6 12 12 16 14"></polyline>
       </svg>
-      <span>Фильмы</span>
-    </button>
-    <button class="mob-nav-item" data-category="series" type="button">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <rect x="2" y="7" width="20" height="15" rx="2"></rect>
-        <polyline points="17 2 12 7 7 2"></polyline>
-      </svg>
-      <span>Сериалы</span>
+      <span>Новинки</span>
     </button>
     <button class="mob-nav-item" data-category="anime" type="button">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
       </svg>
       <span>Аниме</span>
     </button>
     <button class="mob-nav-item" data-category="favorites" type="button">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
       </svg>
       <span>Избранное</span>
+    </button>
+    <button id="mobAccountNavBtn" class="mob-nav-item" type="button">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+        <circle cx="12" cy="7" r="4"></circle>
+      </svg>
+      <span>Профиль</span>
     </button>
   </nav>
 
@@ -405,6 +442,10 @@
             <div id="directPlayerWrap" class="direct-player-wrap">
               <div id="videoStageArea" class="video-stage-area controls-active">
                 <div id="playerOsd" class="player-osd hidden"></div>
+                <div id="vcSleepPill" class="vc-sleep-pill hidden" aria-live="polite"></div>
+                <button id="vcUnlockPill" class="vc-unlock-pill hidden focusable" type="button" title="Разблокировать экран" aria-label="Разблокировать экран">
+                  🔒 Нажмите, чтобы разблокировать экран
+                </button>
                 <button id="lobbyPlayerPill" class="lobby-player-pill hidden" type="button" title="Открыть панель лобби">
                   <span class="lobby-dot-live"></span>
                   <span id="lobbyPlayerPillText">Лобби</span>
@@ -537,6 +578,22 @@
                     </div>
                   </div>
 
+                  <!-- Sleep Timer Section -->
+                  <div class="vc-menu-section">
+                    <div class="vc-menu-title">
+                      <span>🌙 Таймер сна</span>
+                      <span id="vcMenuCurrentSleep" class="vc-menu-badge">Выкл</span>
+                    </div>
+                    <div class="vc-menu-chips" id="vcSleepChips">
+                      <button class="vc-menu-chip active focusable" data-sleep="off" type="button">Выкл</button>
+                      <button class="vc-menu-chip focusable" data-sleep="15" type="button">15м</button>
+                      <button class="vc-menu-chip focusable" data-sleep="30" type="button">30м</button>
+                      <button class="vc-menu-chip focusable" data-sleep="45" type="button">45м</button>
+                      <button class="vc-menu-chip focusable" data-sleep="60" type="button">60м</button>
+                      <button class="vc-menu-chip focusable" data-sleep="episode" type="button">Конец серии</button>
+                    </div>
+                  </div>
+
                   <!-- Download Section -->
                   <div class="vc-menu-section vc-menu-download-section">
                     <button id="vcDownloadBtn" class="vc-menu-action-btn focusable" type="button">
@@ -612,6 +669,12 @@
                         </svg>
                         <span class="vc-btn-text-chat">Чат</span>
                         <span id="vcLobbyChatBadge" class="chat-unread-pill hidden">0</span>
+                      </button>
+                      <button id="vcLockBtn" class="vc-btn vc-btn-lock focusable" type="button" title="Заблокировать экран от случайных нажатий" aria-label="Заблокировать экран">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
                       </button>
                       <button id="vcMoreBtn" class="vc-btn vc-btn-more focusable" type="button" title="Опции: скорость, субтитры, аудио, скачать, качество" aria-label="Опции и настройки">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -793,6 +856,11 @@
               <div class="info-block">
                 <h3>Студии озвучки</h3>
                 <div id="infoVoicesList" class="voice-badges-wrap"></div>
+              </div>
+
+              <div id="infoSimilarBlock" class="info-block hidden">
+                <h3>Похожие тайтлы</h3>
+                <div id="infoSimilarGrid" class="info-similar-grid"></div>
               </div>
             </div>
           </div>
@@ -1150,6 +1218,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=19"></script>
+  <script src="/app.js?v=20"></script>
 </body>
 </html>
