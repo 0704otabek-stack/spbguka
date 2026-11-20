@@ -3775,8 +3775,24 @@ function isVideoFullscreen() {
 }
 
 function syncFullscreenUi() {
-  const fs = isVideoFullscreen();
-  if (videoStageArea) videoStageArea.classList.toggle('is-fullscreen', fs);
+  const fsEl = getFullscreenElement();
+  const isVideoFs = Boolean(
+    videoStageArea && (
+      fsEl === videoStageArea ||
+      fsEl === html5Video ||
+      fsEl === directPlayerWrap ||
+      videoStageArea.classList.contains('pseudo-fullscreen')
+    )
+  );
+  const isIframeFs = Boolean(
+    iframePlayerWrap && (
+      fsEl === iframePlayerWrap ||
+      iframePlayerWrap.classList.contains('pseudo-fullscreen')
+    )
+  );
+  const fs = isVideoFs || isIframeFs;
+  if (videoStageArea) videoStageArea.classList.toggle('is-fullscreen', isVideoFs);
+  if (iframePlayerWrap) iframePlayerWrap.classList.toggle('is-fullscreen', isIframeFs);
   if (vcFsEnterIcon) vcFsEnterIcon.classList.toggle('hidden', fs);
   if (vcFsExitIcon) vcFsExitIcon.classList.toggle('hidden', !fs);
   if (vcFullscreenBtnText) vcFullscreenBtnText.textContent = fs ? '✕ Выйти' : 'На весь экран';
