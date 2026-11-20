@@ -1173,11 +1173,35 @@ const GENRE_RU_MAP = {
   Anime: 'Аниме'
 };
 
+const RU_TO_CINEMETA_GENRE = {
+  'Боевик': 'Action',
+  'Приключения': 'Adventure',
+  'Мультфильм': 'Animation',
+  'Мультфильмы': 'Animation',
+  'Комедия': 'Comedy',
+  'Криминал': 'Crime',
+  'Документальный': 'Documentary',
+  'Драма': 'Drama',
+  'Семейный': 'Family',
+  'Фэнтези': 'Fantasy',
+  'История': 'History',
+  'Ужасы': 'Horror',
+  'Детектив': 'Mystery',
+  'Мелодрама': 'Romance',
+  'Фантастика': 'Sci-Fi',
+  'Триллер': 'Thriller',
+  'Военный': 'War',
+  'Вестерн': 'Western',
+  'Аниме': 'Animation'
+};
+
 let liveCatalog = SEED_CATALOG.map(x => ({
   ...x,
   isNew: Boolean(x.isNew || x.year >= new Date().getFullYear() - 2 || /2024|2025|2026/.test(String(x.yearRange || '')))
 }));
 let lastCatalogRefreshAt = Date.now();
+const catalogMoreCache = new Map();
+const CATALOG_MORE_TTL_MS = 6 * 3600 * 1000;
 
 function parseReleaseYear(releaseInfo) {
   const match = String(releaseInfo || '').match(/(\d{4})/);
@@ -1188,17 +1212,26 @@ function isLikelyAnimeMeta(meta) {
   const genres = Array.isArray(meta.genres) ? meta.genres : [];
   if (genres.includes('Anime')) return true;
   if (!genres.includes('Animation')) return false;
-  const text = `${meta.country || ''} ${meta.language || ''} ${meta.name || ''} ${meta.description || ''}`;
+  const country = String(meta.country || '').trim();
+  const titleAndDesc = `${meta.name || ''} ${meta.description || ''}`;
+  if (/^\s*japan\b/i.test(country)) return true;
+  if (/^\s*(united states|usa|united kingdom|uk|france|canada|australia|germany|spain|italy)\b/i.test(country)) {
+    return /\b(anime|manga|shonen|isekai|crunchyroll|ghibli|mappa|ufotable|kyoto animation)\b/i.test(titleAndDesc);
+  }
+  const text = `${country} ${meta.language || ''} ${titleAndDesc}`;
   return /japan|japanese|anime|manga|tokyo|kyoto|crunchyroll|shonen|isekai/i.test(text);
 }
 
-async function fetchCinemetaCatalog(mediaType, catalogName = 'top') {
+async function fetchCinemetaCatalog(mediaType, catalogName = 'top', extra = {}) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 7000);
-    const res = await fetch(`https://v3-cinemeta.strem.io/catalog/${mediaType}/${catalogName}.json`, {
-      signal: controller.signal
-    });
+    const parts = [];
+    if (extra && extra.genre) parts.push(`genre=${encodeURIComponent(extra.genre)}`);
+    if (extra && Number(extra.skip) > 0) parts.push(`skip=${Math.floor(Number(extra.skip))}`);
+    const extraSegment = parts.length ? `/${parts.join('&')}` : '';
+    const url = `https://v3-cinemeta.strem.io/catalog/${mediaType}/${catalogName}${extraSegment}.json`;
+    const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return [];
     const json = await res.json();
@@ -1206,6 +1239,62 @@ async function fetchCinemetaCatalog(mediaType, catalogName = 'top') {
   } catch (e) {
     return [];
   }
+}
+
+function cinemetaMetaToItem(m, newThreshold) {
+  const imdbId = m.imdb_id || m.id;
+  const kind = m._kind === 'series' ? 'series' : 'movie';
+  const year = parseReleaseYear(m.releaseInfo);
+  const parsedRating = parseFloat(m.imdbRating);
+  const ratingImdb = (Number.isFinite(parsedRating) && parsedRating > 0) ? Number(parsedRating.toFixed(1)) : 7.4;
+  const ratingKp = Number(Math.max(5.5, Math.min(9.5, ratingImdb - 0.1)).toFixed(1));
+  const ruGenres = (Array.isArray(m.genres) ? m.genres : [])
+    .map(g => GENRE_RU_MAP[g] || g)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (ruGenres.length === 0) ruGenres.push(kind === 'series' ? 'Драма' : 'Кино');
+
+  const isAnim = (m.genres || []).includes('Animation');
+  const isAnime = isLikelyAnimeMeta(m);
+  const resolvedType = isAnime ? 'anime' : (isAnim ? 'cartoon' : kind);
+  if (isAnime && !ruGenres.includes('Аниме')) {
+    ruGenres.unshift('Аниме');
+  }
+  const isRecent = year >= newThreshold;
+
+  const metahubPosterUrl = `https://images.metahub.space/poster/medium/${imdbId}/img`;
+  const metahubBgUrl = `https://images.metahub.space/background/medium/${imdbId}/img`;
+
+  return {
+    id: imdbId,
+    imdbId,
+    kpId: '',
+    title: m.name || imdbId,
+    originalTitle: m.name || '',
+    type: resolvedType,
+    animeFormat: resolvedType === 'anime' ? (kind === 'movie' ? 'movie' : 'series') : undefined,
+    year,
+    yearRange: m.releaseInfo ? String(m.releaseInfo) : String(year),
+    ratingKp,
+    ratingImdb,
+    country: isAnime ? 'Япония' : (m.country || 'США / Мир'),
+    genres: ruGenres.slice(0, 4),
+    duration: kind === 'series' ? '45 мин / серия' : '115 мин',
+    director: Array.isArray(m.director) && m.director.length ? m.director.join(', ') : 'По данным IMDb',
+    cast: Array.isArray(m.cast) && m.cast.length ? m.cast.slice(0, 5).join(', ') : 'В ролях',
+    poster: m.poster || metahubPosterUrl,
+    backdrop: m.background || m.poster || metahubBgUrl,
+    isNew: isRecent,
+    isPopular: true,
+    seasonsCount: kind === 'series' ? 1 : undefined,
+    episodesPerSeason: kind === 'series' ? [10] : undefined,
+    voices: resolvedType === 'anime'
+      ? ['AniLibria', 'Studio Band', 'AniDUB', 'HDrezka Studio', 'Японский + Субтитры']
+      : (kind === 'series'
+          ? ['HDrezka Studio', 'LostFilm', 'Red Head Sound', 'Кубик в кубе', 'Рус. Дублированный', 'Eng.Original']
+          : ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'JASKIER', 'Eng.Original']),
+    description: m.description || `Новинка ${year} года (${m.name}). Смотреть онлайн в HD 1080p без рекламы.`
+  };
 }
 
 async function refreshLiveCatalog() {
@@ -1268,60 +1357,12 @@ async function refreshLiveCatalog() {
       if (!imdbId || !String(imdbId).startsWith('tt') || seedIds.has(imdbId) || seenNew.has(imdbId)) continue;
       seenNew.add(imdbId);
 
-      const year = parseReleaseYear(m.releaseInfo);
-      const parsedRating = parseFloat(m.imdbRating);
-      const ratingImdb = (Number.isFinite(parsedRating) && parsedRating > 0) ? Number(parsedRating.toFixed(1)) : 7.4;
-      const ratingKp = Number(Math.max(5.5, Math.min(9.5, ratingImdb - 0.1)).toFixed(1));
-      const ruGenres = (Array.isArray(m.genres) ? m.genres : [])
-        .map(g => GENRE_RU_MAP[g] || g)
-        .filter(Boolean)
-        .slice(0, 3);
-      if (ruGenres.length === 0) ruGenres.push(m._kind === 'series' ? 'Драма' : 'Кино');
-
-      const isAnim = (m.genres || []).includes('Animation');
-      const isAnime = isLikelyAnimeMeta(m);
-      const resolvedType = isAnime ? 'anime' : (isAnim ? 'cartoon' : m._kind);
-      if (isAnime && !ruGenres.includes('Аниме')) {
-        ruGenres.unshift('Аниме');
-      }
-      const isRecent = year >= newThreshold;
+      const item = cinemetaMetaToItem(m, newThreshold);
 
       // Prioritize current new releases (2024-2026) and high-rated current hits
-      if (!isRecent && candidateNew.length >= 40) continue;
+      if (!item.isNew && candidateNew.length >= 40) continue;
 
-      const metahubPosterUrl = `https://images.metahub.space/poster/medium/${imdbId}/img`;
-      const metahubBgUrl = `https://images.metahub.space/background/medium/${imdbId}/img`;
-
-      candidateNew.push({
-        id: imdbId,
-        imdbId,
-        kpId: '',
-        title: m.name || imdbId,
-        originalTitle: m.name || '',
-        type: resolvedType,
-        animeFormat: resolvedType === 'anime' ? (m._kind === 'movie' ? 'movie' : 'series') : undefined,
-        year,
-        yearRange: m.releaseInfo ? String(m.releaseInfo) : String(year),
-        ratingKp,
-        ratingImdb,
-        country: isAnime ? 'Япония' : 'США / Мир',
-        genres: ruGenres.slice(0, 4),
-        duration: m._kind === 'series' ? '45 мин / серия' : '115 мин',
-        director: Array.isArray(m.director) && m.director.length ? m.director.join(', ') : 'По данным IMDb',
-        cast: Array.isArray(m.cast) && m.cast.length ? m.cast.slice(0, 5).join(', ') : 'В ролях',
-        poster: m.poster || metahubPosterUrl,
-        backdrop: m.background || m.poster || metahubBgUrl,
-        isNew: isRecent,
-        isPopular: true,
-        seasonsCount: m._kind === 'series' ? 1 : undefined,
-        episodesPerSeason: m._kind === 'series' ? [10] : undefined,
-        voices: resolvedType === 'anime'
-          ? ['AniLibria', 'Studio Band', 'AniDUB', 'HDrezka Studio', 'Японский + Субтитры']
-          : (m._kind === 'series'
-              ? ['HDrezka Studio', 'LostFilm', 'Red Head Sound', 'Кубик в кубе', 'Рус. Дублированный', 'Eng.Original']
-              : ['Рус. Дублированный', 'Red Head Sound', 'HDrezka Studio', 'JASKIER', 'Eng.Original']),
-        description: m.description || `Новинка ${year} года (${m.name}). Смотреть онлайн в HD 1080p без рекламы.`
-      });
+      candidateNew.push(item);
 
       if (candidateNew.length >= 70) break;
     }
@@ -1342,6 +1383,145 @@ async function refreshLiveCatalog() {
   } catch (e) {
     console.error('Catalog refresh failed:', e.message);
   }
+}
+
+async function handleCatalogMore(params = {}) {
+  const category = String(params.category || 'all').trim() || 'all';
+  const animeSub = String(params.animeSub || 'all').trim() || 'all';
+  const genre = String(params.genre || 'all').trim() || 'all';
+  const year = String(params.year || 'all').trim() || 'all';
+  const sort = String(params.sort || 'popular').trim() || 'popular';
+  const page = Math.max(1, Math.min(20, parseInt(params.page, 10) || 1));
+
+  const cacheKey = `${category}|${animeSub}|${genre}|${year}|${sort}|${page}`;
+  const cached = catalogMoreCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < CATALOG_MORE_TTL_MS) {
+    return cached.data;
+  }
+
+  const currentYear = new Date().getFullYear();
+  const newThreshold = currentYear - 2;
+  const cmGenre = genre !== 'all' ? (RU_TO_CINEMETA_GENRE[genre] || '') : '';
+  const catName = sort === 'rating' ? 'imdbRating' : 'top';
+
+  const fetches = [];
+  let rawMetas = [];
+
+  if (category === 'anime') {
+    const skip = (page - 1) * 50;
+    if (animeSub === 'movie') {
+      fetches.push(
+        fetchCinemetaCatalog('movie', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' }))),
+        fetchCinemetaCatalog('movie', 'imdbRating', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' })))
+      );
+    } else if (animeSub === 'series') {
+      fetches.push(
+        fetchCinemetaCatalog('series', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' }))),
+        fetchCinemetaCatalog('series', 'imdbRating', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' })))
+      );
+    } else if (animeSub === 'top') {
+      fetches.push(
+        fetchCinemetaCatalog('series', 'imdbRating', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' }))),
+        fetchCinemetaCatalog('series', 'top', { genre: 'Animation', skip: skip + 50 }).then(ms => ms.map(m => ({ ...m, _kind: 'series' }))),
+        fetchCinemetaCatalog('movie', 'imdbRating', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' })))
+      );
+    } else {
+      fetches.push(
+        fetchCinemetaCatalog('series', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' }))),
+        fetchCinemetaCatalog('movie', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' })))
+      );
+    }
+    const groups = await Promise.all(fetches);
+    rawMetas = groups.flat().filter(m => isLikelyAnimeMeta(m));
+  } else if (category === 'cartoon') {
+    const skip = (page - 1) * 50;
+    const [mv, sv] = await Promise.all([
+      fetchCinemetaCatalog('movie', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' }))),
+      fetchCinemetaCatalog('series', 'top', { genre: 'Animation', skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' })))
+    ]);
+    rawMetas = [...mv, ...sv].filter(m => !isLikelyAnimeMeta(m));
+  } else if (category === 'movie') {
+    const skip = cmGenre ? (page - 1) * 50 : page * 50;
+    const mv = await fetchCinemetaCatalog('movie', catName, { genre: cmGenre || undefined, skip });
+    rawMetas = mv.map(m => ({ ...m, _kind: 'movie' }));
+  } else if (category === 'series') {
+    const skip = cmGenre ? (page - 1) * 50 : page * 50;
+    const sv = await fetchCinemetaCatalog('series', catName, { genre: cmGenre || undefined, skip });
+    rawMetas = sv.map(m => ({ ...m, _kind: 'series' }));
+  } else if (category === 'new') {
+    const targetYear = String(currentYear - (Math.floor((page - 1) / 2) % 3));
+    const yearSkip = ((page - 1) % 2) * 50;
+    const [mv, sv] = await Promise.all([
+      fetchCinemetaCatalog('movie', 'year', { genre: targetYear, skip: yearSkip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' }))),
+      fetchCinemetaCatalog('series', 'year', { genre: targetYear, skip: yearSkip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' })))
+    ]);
+    rawMetas = [...mv, ...sv];
+  } else {
+    const skip = cmGenre ? (page - 1) * 50 : page * 50;
+    const [mv, sv] = await Promise.all([
+      fetchCinemetaCatalog('movie', catName, { genre: cmGenre || undefined, skip }).then(ms => ms.map(m => ({ ...m, _kind: 'movie' }))),
+      fetchCinemetaCatalog('series', catName, { genre: cmGenre || undefined, skip }).then(ms => ms.map(m => ({ ...m, _kind: 'series' })))
+    ]);
+    rawMetas = [...mv, ...sv];
+  }
+
+  const seen = new Set();
+  const candidates = [];
+  for (const m of rawMetas) {
+    const imdbId = m.imdb_id || m.id;
+    if (!imdbId || !String(imdbId).startsWith('tt') || seen.has(imdbId)) continue;
+    seen.add(imdbId);
+    const item = cinemetaMetaToItem(m, newThreshold);
+
+    if (genre !== 'all') {
+      const gLower = genre.toLowerCase();
+      if (!(item.genres || []).some(g => g.toLowerCase() === gLower)) continue;
+    }
+    if (year === '2024-2026' && item.year < 2024) continue;
+    else if (year === '2020-2023' && (item.year < 2020 || item.year > 2023)) continue;
+    else if (year === '2010-2019' && (item.year < 2010 || item.year > 2019)) continue;
+    else if (year === 'old' && item.year >= 2010) continue;
+
+    candidates.push(item);
+  }
+
+  let selected = candidates;
+  if (category === 'anime' && animeSub === 'new') {
+    const recent = candidates.filter(x => x.isNew || x.year >= newThreshold);
+    const older = candidates.filter(x => !x.isNew && x.year < newThreshold);
+    selected = recent.length >= 8 ? recent : [...recent, ...older];
+  } else if (sort === 'rating' || (category === 'anime' && animeSub === 'top')) {
+    selected.sort((a, b) => (b.ratingImdb || 0) - (a.ratingImdb || 0));
+  } else if (sort === 'year' || category === 'new') {
+    selected.sort((a, b) => (b.year - a.year) || ((b.ratingImdb || 0) - (a.ratingImdb || 0)));
+  }
+
+  const slice = selected.slice(0, 36);
+  const batchPromises = [];
+  for (let i = 0; i < slice.length; i += 12) {
+    batchPromises.push(enrichWithRussianMetadata(slice.slice(i, i + 12)));
+  }
+  const enrichedGroups = await Promise.all(batchPromises);
+  const items = enrichedGroups.flat();
+
+  if (items.length > 0) {
+    const existingIds = new Set(liveCatalog.map(x => x.imdbId));
+    for (const it of items) {
+      if (!existingIds.has(it.imdbId)) {
+        existingIds.add(it.imdbId);
+        liveCatalog.push(it);
+      }
+    }
+    if (liveCatalog.length > 1500) {
+      liveCatalog = liveCatalog.slice(0, 1500);
+    }
+  }
+
+  const result = { items, page, hasMore: rawMetas.length > 0 && page < 20 };
+  if (items.length > 0) {
+    catalogMoreCache.set(cacheKey, { ts: Date.now(), data: result });
+  }
+  return result;
 }
 
 function getMsUntilNext10Am(tzOffsetHours = 5) {
@@ -2386,6 +2566,18 @@ const server = http.createServer(async (req, res) => {
     }
 
     return sendJson(res, 200, { items: list, total: list.length, updatedAt: lastCatalogRefreshAt }, req);
+  }
+
+  if (pathname === '/api/catalog/more') {
+    const result = await handleCatalogMore({
+      category: parsedUrl.searchParams.get('category') || 'all',
+      animeSub: parsedUrl.searchParams.get('animeSub') || 'all',
+      genre: parsedUrl.searchParams.get('genre') || 'all',
+      year: parsedUrl.searchParams.get('year') || 'all',
+      sort: parsedUrl.searchParams.get('sort') || 'popular',
+      page: parsedUrl.searchParams.get('page') || '1'
+    });
+    return sendJson(res, 200, result, req);
   }
 
   if (pathname === '/api/search') {

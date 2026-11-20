@@ -20,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=21" />
+  <link rel="stylesheet" href="/styles.css?v=22" />
 </head>
 <body>
   <!-- Top Header -->
@@ -365,6 +365,15 @@
 
       <!-- Catalog Grid -->
       <div id="catalogGrid" class="catalog-grid"></div>
+
+      <!-- Load More Pagination -->
+      <div id="loadMoreWrap" class="load-more-wrap hidden">
+        <button id="loadMoreBtn" class="btn-glass load-more-btn focusable" type="button">
+          <span id="loadMoreBtnText">Показать ещё</span>
+          <span id="loadMoreSpinner" class="load-more-spinner hidden" aria-hidden="true"></span>
+        </button>
+        <p id="loadMoreHint" class="load-more-hint"></p>
+      </div>
     </main>
   </div>
 
@@ -1218,6 +1227,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=21"></script>
+  <script src="/app.js?v=22"></script>
 </body>
 </html>

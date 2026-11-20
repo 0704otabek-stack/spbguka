@@ -99,7 +99,8 @@ html.tv-mode .btn-primary.tv-focus,
 html.tv-mode .chip-btn.active.tv-focus,
 html.tv-mode .hdvb-tab.active.tv-focus,
 html.tv-mode .vc-btn.tv-focus,
-html.tv-mode .video-smart-btn.tv-focus {
+html.tv-mode .video-smart-btn.tv-focus,
+html.tv-mode .load-more-btn.tv-focus {
   background: var(--brand) !important;
   color: #fff !important;
   border-color: #ffffff !important;
@@ -3962,6 +3963,59 @@ body.pseudo-fullscreen-open {
   }
 }
 
+.load-more-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 12px 12px;
+}
+
+.load-more-btn {
+  min-width: 220px;
+  min-height: 46px;
+  padding: 12px 28px;
+  border-radius: 999px;
+  font-size: 0.94rem;
+  font-weight: 700;
+  gap: 10px;
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  background: rgba(118, 118, 128, 0.28);
+  transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.load-more-btn:hover:not(:disabled) {
+  background: rgba(118, 118, 128, 0.44);
+  border-color: rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
+}
+
+.load-more-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  transform: none;
+}
+
+.load-more-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #ffffff;
+  animation: loadMoreSpin 0.7s linear infinite;
+}
+
+@keyframes loadMoreSpin {
+  to { transform: rotate(360deg); }
+}
+
+.load-more-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
 /* LG webOS / Smart TV Performance Mode (Zero expensive shadows, gradients, or GPU-thrashing transitions) */
 html.tv-mode body {
   background-image: none;
@@ -3977,6 +4031,11 @@ html.tv-mode .actor-modal-backdrop,
 html.tv-mode .vc-unlock-pill {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+html.tv-mode .topbar,
+html.tv-mode .mobile-bottom-nav {
+  background: #0a0a0c !important;
 }
 
 html.tv-mode .topbar,

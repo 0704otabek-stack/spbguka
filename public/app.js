@@ -523,6 +523,14 @@ const continueWatchingBar = document.getElementById('continueWatchingBar');
 const continueCardsList = document.getElementById('continueCardsList');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
 const resetFiltersBtn = document.getElementById('resetFiltersBtn');
+const loadMoreWrap = document.getElementById('loadMoreWrap');
+const loadMoreBtn = document.getElementById('loadMoreBtn');
+const loadMoreBtnText = document.getElementById('loadMoreBtnText');
+const loadMoreSpinner = document.getElementById('loadMoreSpinner');
+const loadMoreHint = document.getElementById('loadMoreHint');
+
+const catalogMoreState = new Map();
+let isLoadingMoreCatalog = false;
 
 // Modal Elements
 const itemModal = document.getElementById('itemModal');
@@ -2116,12 +2124,203 @@ function renderNewReleasesShelf() {
   newReleasesShelf.classList.remove('hidden');
 }
 
+function getCurrentCatalogViewKey() {
+  return `${state.category}|${state.animeSubFilter}|${state.genre}|${state.year}|${state.sort}`;
+}
+
+function updateLoadMoreUi() {
+  if (!loadMoreWrap || !loadMoreBtn) return;
+  const hiddenView = Boolean(
+    state.searchQuery.trim() ||
+    state.category === 'favorites' ||
+    state.category === 'history' ||
+    !state.catalogItems ||
+    state.catalogItems.length === 0
+  );
+  if (hiddenView) {
+    loadMoreWrap.classList.add('hidden');
+    return;
+  }
+
+  loadMoreWrap.classList.remove('hidden');
+  const viewState = catalogMoreState.get(getCurrentCatalogViewKey()) || { page: 0, exhausted: false };
+
+  if (viewState.exhausted) {
+    loadMoreBtn.disabled = true;
+    if (loadMoreBtnText) loadMoreBtnText.textContent = 'Все тайтлы загружены';
+    if (loadMoreSpinner) loadMoreSpinner.classList.add('hidden');
+    if (loadMoreHint) loadMoreHint.textContent = `Показано ${state.catalogItems.length} тайтлов`;
+  } else if (isLoadingMoreCatalog) {
+    loadMoreBtn.disabled = true;
+    if (loadMoreBtnText) loadMoreBtnText.textContent = 'Загружаем ещё...';
+    if (loadMoreSpinner) loadMoreSpinner.classList.remove('hidden');
+    if (loadMoreHint) loadMoreHint.textContent = `Показано ${state.catalogItems.length} тайтлов`;
+  } else {
+    loadMoreBtn.disabled = false;
+    if (loadMoreBtnText) loadMoreBtnText.textContent = 'Показать ещё';
+    if (loadMoreSpinner) loadMoreSpinner.classList.add('hidden');
+    if (loadMoreHint) loadMoreHint.textContent = `Показано ${state.catalogItems.length} тайтлов • нажмите, чтобы загрузить ещё`;
+  }
+}
+
+function createMovieCardElement(item, favIds, historyMap) {
+  const card = document.createElement('article');
+  card.className = 'movie-card focusable';
+  card.tabIndex = 0;
+  const typeLabel = TYPE_LABELS[item.type] || 'Кино';
+  const voicesList = item.voices || ['Рус. Дублированный', 'HDrezka Studio', 'Red Head Sound'];
+  const historyMatch = historyMap.get(item.imdbId);
+  const isFav = favIds.has(item.imdbId);
+  const progressPct = getProgressPercent(historyMatch);
+
+  card.innerHTML = `
+    <div class="card-poster-wrap">
+      <img
+        src="${item.poster}"
+        alt="${item.title}"
+        class="card-poster"
+        loading="lazy"
+        decoding="async"
+        onerror="this.src='https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80'"
+      />
+      <div class="card-badges-top">
+        <span class="card-type-pill">${typeLabel}</span>
+        <div class="card-ratings-pill">
+          ${item.ratingKp ? `<span class="r-badge kp">${item.ratingKp}</span>` : ''}
+          ${item.ratingImdb ? `<span class="r-badge imdb">${item.ratingImdb}</span>` : ''}
+        </div>
+      </div>
+      <button type="button" class="card-fav-btn ${isFav ? 'is-fav' : ''}" title="${isFav ? 'Убрать из избранного' : 'В избранное'}" aria-label="В избранное">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </button>
+      <div class="card-play-hover">
+        <div class="play-circle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7 5v14l11-7z"/>
+          </svg>
+        </div>
+      </div>
+      ${progressPct > 0
+        ? `<div class="card-progress-bar"><div class="card-progress-fill" style="width:${progressPct}%"></div></div>`
+        : ''}
+      ${item.isNew ? '<span class="card-new-pill">Новинка</span>' : ''}
+    </div>
+    <div class="card-body">
+      <h3 class="card-title" title="${item.title}">${item.title}</h3>
+      <div class="card-sub">${item.yearRange || item.year} • ${(item.genres || ['Кино']).slice(0, 2).join(', ')}</div>
+      <div class="card-voices-preview">
+        ${historyMatch
+          ? `Сезон ${historyMatch.season}, Серия ${historyMatch.episode} • ${historyMatch.voice}`
+          : `${voicesList.length} ${voicesList.length === 1 ? 'озвучка' : voicesList.length < 5 ? 'озвучки' : 'озвучек'}`}
+      </div>
+    </div>
+  `;
+
+  const favBtn = card.querySelector('.card-fav-btn');
+  favBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    const added = toggleFavorite(item);
+    favBtn.classList.toggle('is-fav', added);
+    favBtn.title = added ? 'Убрать из избранного' : 'В избранное';
+    if (state.category === 'favorites') loadCatalog();
+  });
+
+  card.addEventListener('click', () => openItemModal(item, 'player'));
+  return card;
+}
+
+function appendCatalogCards(newItems) {
+  if (!Array.isArray(newItems) || newItems.length === 0) return;
+  resultsCount.textContent = state.catalogItems.length;
+  emptyState.classList.add('hidden');
+  const favIds = new Set(state.favorites.map(f => f.imdbId));
+  const historyMap = new Map(state.history.map(h => [h.imdbId, h]));
+  for (const item of newItems) {
+    catalogGrid.appendChild(createMovieCardElement(item, favIds, historyMap));
+  }
+  updateLoadMoreUi();
+}
+
+async function loadMoreCatalogItems() {
+  if (isLoadingMoreCatalog) return;
+  if (state.searchQuery.trim() || state.category === 'favorites' || state.category === 'history') return;
+
+  const viewKey = getCurrentCatalogViewKey();
+  const viewState = catalogMoreState.get(viewKey) || { page: 0, exhausted: false };
+  if (viewState.exhausted) return;
+
+  isLoadingMoreCatalog = true;
+  updateLoadMoreUi();
+
+  try {
+    let appendedAny = false;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      viewState.page += 1;
+      const params = new URLSearchParams({
+        category: state.category || 'all',
+        animeSub: state.animeSubFilter || 'all',
+        genre: state.genre || 'all',
+        year: state.year || 'all',
+        sort: state.sort || 'popular',
+        page: String(viewState.page)
+      });
+      const res = await fetch(`/api/catalog/more?${params.toString()}`);
+      if (!res.ok) break;
+      const data = await res.json();
+
+      if (getCurrentCatalogViewKey() !== viewKey) return;
+
+      const curIds = new Set(state.catalogItems.map(x => x.imdbId));
+      const masterIds = new Set((state.masterCatalog || []).map(x => x.imdbId));
+      const rawItems = Array.isArray(data.items) ? data.items : [];
+      const unseen = [];
+
+      for (const it of rawItems) {
+        if (!it || !it.imdbId) continue;
+        if (!masterIds.has(it.imdbId)) {
+          masterIds.add(it.imdbId);
+          if (Array.isArray(state.masterCatalog)) state.masterCatalog.push(it);
+        }
+        if (!curIds.has(it.imdbId)) {
+          curIds.add(it.imdbId);
+          unseen.push(it);
+        }
+      }
+
+      if (unseen.length > 0) {
+        state.catalogItems.push(...unseen);
+        appendCatalogCards(unseen);
+        appendedAny = true;
+        if (data.hasMore === false) viewState.exhausted = true;
+        break;
+      }
+
+      if (!data.hasMore) {
+        viewState.exhausted = true;
+        break;
+      }
+    }
+    if (!appendedAny && viewState.page >= 20) {
+      viewState.exhausted = true;
+    }
+    catalogMoreState.set(viewKey, viewState);
+  } catch (e) {
+    showPlayerOsd('Не удалось загрузить ещё тайтлы');
+  } finally {
+    isLoadingMoreCatalog = false;
+    updateLoadMoreUi();
+  }
+}
+
 function renderCatalogGrid(items) {
   resultsCount.textContent = items.length;
   catalogGrid.innerHTML = '';
 
   if (items.length === 0) {
     emptyState.classList.remove('hidden');
+    updateLoadMoreUi();
     return;
   }
   emptyState.classList.add('hidden');
@@ -2130,72 +2329,9 @@ function renderCatalogGrid(items) {
   const historyMap = new Map(state.history.map(h => [h.imdbId, h]));
 
   for (const item of items) {
-    const card = document.createElement('article');
-    card.className = 'movie-card focusable';
-    card.tabIndex = 0;
-    const typeLabel = TYPE_LABELS[item.type] || 'Кино';
-    const voicesList = item.voices || ['Рус. Дублированный', 'HDrezka Studio', 'Red Head Sound'];
-    const historyMatch = historyMap.get(item.imdbId);
-    const isFav = favIds.has(item.imdbId);
-    const progressPct = getProgressPercent(historyMatch);
-
-    card.innerHTML = `
-      <div class="card-poster-wrap">
-        <img
-          src="${item.poster}"
-          alt="${item.title}"
-          class="card-poster"
-          loading="lazy"
-          decoding="async"
-          onerror="this.src='https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=600&q=80'"
-        />
-        <div class="card-badges-top">
-          <span class="card-type-pill">${typeLabel}</span>
-          <div class="card-ratings-pill">
-            ${item.ratingKp ? `<span class="r-badge kp">${item.ratingKp}</span>` : ''}
-            ${item.ratingImdb ? `<span class="r-badge imdb">${item.ratingImdb}</span>` : ''}
-          </div>
-        </div>
-        <button type="button" class="card-fav-btn ${isFav ? 'is-fav' : ''}" title="${isFav ? 'Убрать из избранного' : 'В избранное'}" aria-label="В избранное">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
-          </svg>
-        </button>
-        <div class="card-play-hover">
-          <div class="play-circle">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M7 5v14l11-7z"/>
-            </svg>
-          </div>
-        </div>
-        ${progressPct > 0
-          ? `<div class="card-progress-bar"><div class="card-progress-fill" style="width:${progressPct}%"></div></div>`
-          : ''}
-        ${item.isNew ? '<span class="card-new-pill">Новинка</span>' : ''}
-      </div>
-      <div class="card-body">
-        <h3 class="card-title" title="${item.title}">${item.title}</h3>
-        <div class="card-sub">${item.yearRange || item.year} • ${(item.genres || ['Кино']).slice(0, 2).join(', ')}</div>
-        <div class="card-voices-preview">
-          ${historyMatch
-            ? `Сезон ${historyMatch.season}, Серия ${historyMatch.episode} • ${historyMatch.voice}`
-            : `${voicesList.length} ${voicesList.length === 1 ? 'озвучка' : voicesList.length < 5 ? 'озвучки' : 'озвучек'}`}
-        </div>
-      </div>
-    `;
-
-    const favBtn = card.querySelector('.card-fav-btn');
-    favBtn.addEventListener('click', e => {
-      e.stopPropagation();
-      const added = toggleFavorite(item);
-      favBtn.classList.toggle('is-fav', added);
-      favBtn.title = added ? 'Убрать из избранного' : 'В избранное';
-      if (state.category === 'favorites') loadCatalog();
-    });
-
-    card.addEventListener('click', () => openItemModal(item, 'player'));
-    catalogGrid.appendChild(card);
+    catalogGrid.appendChild(createMovieCardElement(item, favIds, historyMap));
   }
+  updateLoadMoreUi();
 }
 
 function getActiveEpisodeObj(item) {
@@ -5684,6 +5820,10 @@ if (inviteToastDeclineBtn) {
 
 // Clear TV focus highlight when user switches to mouse/touch
 document.addEventListener('pointerdown', clearTvFocus);
+
+if (loadMoreBtn) {
+  loadMoreBtn.addEventListener('click', loadMoreCatalogItems);
+}
 
 // Initialize
 applySavedAudioPreferences();
