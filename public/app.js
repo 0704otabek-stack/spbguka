@@ -118,6 +118,9 @@ async function restoreAuthSessionFromCookie() {
 }
 
 const clientStreamCache = new Map();
+const clientSourceCache = new Map();
+let hlsRecoveryAttempts = 0;
+let activeMp4FallbackHandler = null;
 
 function getClientMirrorList(preferredMirror = 'direct') {
   if (preferredMirror === 'kinokino') {
@@ -125,6 +128,7 @@ function getClientMirrorList(preferredMirror = 'direct') {
       'https://kinokino.vip',
       'https://api.namy.ws',
       'https://api.kinogram.best',
+      'https://api.embf.net',
       'https://api.embess.ws',
       'https://api.delivembd.ws'
     ];
@@ -133,6 +137,7 @@ function getClientMirrorList(preferredMirror = 'direct') {
     return [
       'https://api.namy.ws',
       'https://api.kinogram.best',
+      'https://api.embf.net',
       'https://api.embess.ws',
       'https://api.delivembd.ws'
     ];
@@ -141,6 +146,7 @@ function getClientMirrorList(preferredMirror = 'direct') {
     return [
       'https://api.delivembd.ws',
       'https://api.kinogram.best',
+      'https://api.embf.net',
       'https://api.embess.ws',
       'https://api.namy.ws'
     ];
@@ -148,6 +154,7 @@ function getClientMirrorList(preferredMirror = 'direct') {
   return [
     'https://api.kinogram.best',
     'https://api.namy.ws',
+    'https://api.embf.net',
     'https://api.embess.ws',
     'https://api.delivembd.ws'
   ];
@@ -404,9 +411,210 @@ function revokeCurrentManifestBlob() {
   }
 }
 
+const HLS_AD_URL_RE = /(?:distribrey|getsdk|doubleclick|googlesyndication|adservice|adserver|stiven-king|deltarockme|vak345|vast|preroll|midroll|postroll|reklama|1xbet|fonbet|melbet|mostbet|vavada|pinup|\/ads?\/|\/advert\/|\/promo\/|[_-]adv?[_.-])/i;
+
+function resolveClientHostDirKey(absUrl) {
+  try {
+    const u = new URL(absUrl, window.location.origin);
+    const dir = u.pathname.slice(0, u.pathname.lastIndexOf('/') + 1);
+    return `${u.host}${dir}`;
+  } catch (e) {
+    return '';
+  }
+}
+
+function stripHlsAdSegments(rawText, baseUrl) {
+  if (!rawText || !rawText.includes('#EXTINF:') || rawText.includes('#EXT-X-STREAM-INF')) {
+    return { text: rawText, strippedCount: 0 };
+  }
+
+  const lines = rawText.split(/\r?\n/);
+  const headerLines = [];
+  let bodyStart = 0;
+  for (; bodyStart < lines.length; bodyStart++) {
+    const t = lines[bodyStart].trim();
+    if (
+      t.startsWith('#EXTINF:') ||
+      t.startsWith('#EXT-X-DISCONTINUITY') ||
+      t.startsWith('#EXT-X-CUE-OUT')
+    ) {
+      break;
+    }
+    if (lines[bodyStart] !== '') headerLines.push(lines[bodyStart]);
+  }
+
+  let hasEndlist = false;
+  const blocks = [];
+  let currentBlock = { segments: [] };
+  let pendingTags = [];
+  let pendingDuration = 0;
+  let inCueOut = false;
+
+  const flushBlock = () => {
+    if (currentBlock.segments.length > 0) {
+      blocks.push(currentBlock);
+      currentBlock = { segments: [] };
+    }
+  };
+
+  for (let i = bodyStart; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.startsWith('#EXT-X-ENDLIST')) {
+      hasEndlist = true;
+      break;
+    }
+    if (trimmed.startsWith('#EXT-X-CUE-OUT')) {
+      inCueOut = true;
+      continue;
+    }
+    if (trimmed.startsWith('#EXT-X-CUE-IN')) {
+      inCueOut = false;
+      continue;
+    }
+    if (trimmed.startsWith('#EXT-X-DISCONTINUITY') && !trimmed.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE')) {
+      flushBlock();
+      pendingTags = [];
+      pendingDuration = 0;
+      continue;
+    }
+    if (trimmed.startsWith('#EXT-X-DATERANGE') && /SCTE35-OUT|CLASS="[^"]*\bad\b/i.test(trimmed)) {
+      continue;
+    }
+
+    if (trimmed.startsWith('#')) {
+      if (trimmed.startsWith('#EXTINF:')) {
+        const durVal = parseFloat(trimmed.slice(8));
+        if (Number.isFinite(durVal) && durVal > 0) pendingDuration = durVal;
+      }
+      pendingTags.push(line);
+      continue;
+    }
+
+    let absUrl = trimmed;
+    try {
+      absUrl = baseUrl ? new URL(trimmed, baseUrl).href : trimmed;
+    } catch (e) {}
+
+    const urlAd = HLS_AD_URL_RE.test(absUrl) || HLS_AD_URL_RE.test(trimmed);
+    currentBlock.segments.push({
+      tags: pendingTags,
+      uri: trimmed,
+      absUrl,
+      hostDir: resolveClientHostDirKey(absUrl),
+      duration: pendingDuration || 6,
+      isAd: inCueOut || urlAd
+    });
+    pendingTags = [];
+    pendingDuration = 0;
+  }
+  flushBlock();
+
+  let strippedCount = 0;
+  for (const blk of blocks) {
+    const kept = [];
+    for (const seg of blk.segments) {
+      if (seg.isAd) strippedCount++;
+      else kept.push(seg);
+    }
+    blk.segments = kept;
+  }
+
+  const nonEmptyBlocks = blocks.filter(b => b.segments.length > 0);
+  if (nonEmptyBlocks.length > 1) {
+    const dirDurations = new Map();
+    let totalDur = 0;
+    for (const blk of nonEmptyBlocks) {
+      let blkDur = 0;
+      const blkDirs = new Map();
+      for (const seg of blk.segments) {
+        blkDur += seg.duration;
+        totalDur += seg.duration;
+        if (seg.hostDir) {
+          blkDirs.set(seg.hostDir, (blkDirs.get(seg.hostDir) || 0) + seg.duration);
+          dirDurations.set(seg.hostDir, (dirDurations.get(seg.hostDir) || 0) + seg.duration);
+        }
+      }
+      blk.blockDur = blkDur;
+      let bestDir = '';
+      let bestDirDur = -1;
+      for (const [d, dur] of blkDirs.entries()) {
+        if (dur > bestDirDur) { bestDirDur = dur; bestDir = d; }
+      }
+      blk.hostDir = bestDir;
+    }
+
+    let dominantHostDir = '';
+    let dominantDur = 0;
+    for (const [d, dur] of dirDurations.entries()) {
+      if (dur > dominantDur) { dominantDur = dur; dominantHostDir = d; }
+    }
+
+    if (dominantHostDir && totalDur > 0 && (dominantDur >= 120 || dominantDur > totalDur * 0.5)) {
+      for (const blk of nonEmptyBlocks) {
+        if (blk.hostDir && blk.hostDir !== dominantHostDir && blk.blockDur <= 125) {
+          blk.drop = true;
+          strippedCount += blk.segments.length;
+        }
+      }
+    }
+  }
+
+  const finalBlocks = nonEmptyBlocks.filter(b => !b.drop && b.segments.length > 0);
+  const keptCount = finalBlocks.reduce((acc, b) => acc + b.segments.length, 0);
+  if (keptCount === 0 || strippedCount === 0) {
+    return { text: rawText, strippedCount: 0 };
+  }
+
+  const out = [...headerLines];
+  finalBlocks.forEach((blk, idx) => {
+    if (idx > 0) out.push('#EXT-X-DISCONTINUITY');
+    for (const seg of blk.segments) {
+      for (const t of seg.tags) out.push(t);
+      out.push(seg.uri);
+    }
+  });
+  if (hasEndlist) out.push('#EXT-X-ENDLIST');
+  return { text: out.join('\n'), strippedCount };
+}
+
+function createAdShieldPlaylistLoader() {
+  const BaseLoader = window.Hls?.DefaultConfig?.loader;
+  if (!BaseLoader) return undefined;
+  return class AdShieldPlaylistLoader extends BaseLoader {
+    load(context, config, callbacks) {
+      const origOnSuccess = callbacks.onSuccess;
+      const wrappedCallbacks = {
+        ...callbacks,
+        onSuccess: (response, stats, ctx, networkDetails) => {
+          if (
+            response &&
+            typeof response.data === 'string' &&
+            response.data.includes('#EXTINF:') &&
+            !response.data.includes('#EXT-X-STREAM-INF')
+          ) {
+            const cleaned = stripHlsAdSegments(response.data, response.url || ctx?.url || context?.url || '');
+            if (cleaned.strippedCount > 0) {
+              response.data = cleaned.text;
+              showPlayerOsd(`Заблокирована видеореклама (${cleaned.strippedCount} сегм.)`);
+            }
+          }
+          origOnSuccess(response, stats, ctx, networkDetails);
+        }
+      };
+      super.load(context, config, wrappedCallbacks);
+    }
+  };
+}
+
 // Fetch master.m3u8 directly in browser (or via backend proxy fallback), clean failover audio duplicates,
 // apply chosen voiceover track, and return Blob URL (hls.js) or data URI (iOS Safari native HLS).
 async function buildClientHlsManifestUrl(rawHlsUrl, voiceIdx, singleAudio = false) {
+  if (rawHlsUrl.startsWith('/api/source/')) {
+    return rawHlsUrl;
+  }
   const isProxyUrl = rawHlsUrl.startsWith('/api/hls-proxy');
   const fetchTarget = isProxyUrl
     ? `${rawHlsUrl}&audio=${voiceIdx}${singleAudio ? '&singleAudio=1' : ''}`
@@ -633,6 +841,7 @@ const overlayRewind120Btn = document.getElementById('overlayRewind120Btn');
 const overlayForward120Btn = document.getElementById('overlayForward120Btn');
 const overlayNextEpBtn = document.getElementById('overlayNextEpBtn');
 const overlayNextEpText = document.getElementById('overlayNextEpText');
+const playerSourceBadge = document.getElementById('playerSourceBadge');
 const nowPlayingText = document.getElementById('nowPlayingText');
 
 // Actor Profile Modal Elements
@@ -2395,6 +2604,74 @@ function getActiveEpisodeObj(item) {
   return seasonList.find(ep => Number(ep.episode) === Number(state.selectedEpisode)) || seasonList[0] || null;
 }
 
+function clearClientStreamCacheForItem(imdbId) {
+  if (!imdbId) return;
+  for (const key of clientStreamCache.keys()) {
+    if (key.startsWith(`${imdbId}:`)) {
+      clientStreamCache.delete(key);
+    }
+  }
+}
+
+async function fetchCollapsDetailsFallback(item, preferredMirror = 'direct') {
+  try {
+    const res = await fetch(
+      `/api/details?imdb=${encodeURIComponent(item.imdbId || '')}&title=${encodeURIComponent(item.title || '')}&mirror=${encodeURIComponent(preferredMirror)}`
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function resolveAlternativeSource(balancer, item, opts = {}) {
+  if (!item) return { found: false };
+  const isKinogo = balancer === 'kinogo';
+  const sPart = isKinogo ? String(opts.season || '') : '';
+  const ePart = isKinogo ? String(opts.episode || '') : '';
+  const cacheKey = `${balancer}:${item.imdbId || item.title}:${sPart}:${ePart}`;
+  const cached = clientSourceCache.get(cacheKey);
+  if (cached && (Date.now() - cached.ts) < 10 * 60 * 1000) {
+    return cached.data;
+  }
+
+  let url = '';
+  if (balancer === 'animevost' || balancer === 'anilibria') {
+    const params = new URLSearchParams({
+      title: item.title || '',
+      originalTitle: item.originalTitle || '',
+      year: String(item.year || ''),
+      type: item.type || 'anime'
+    });
+    url = `/api/source/${balancer}?${params.toString()}`;
+  } else if (isKinogo) {
+    const params = new URLSearchParams({
+      imdb: item.imdbId || '',
+      kp: item.kpId || '',
+      title: item.title || '',
+      year: String(item.year || ''),
+      type: item.type || 'movie',
+      season: sPart,
+      episode: ePart
+    });
+    url = `/api/source/kinogo?${params.toString()}`;
+  } else {
+    return { found: false };
+  }
+
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return { found: false };
+    const data = await r.json();
+    if (data) {
+      clientSourceCache.set(cacheKey, { ts: Date.now(), data });
+      return data;
+    }
+  } catch (e) {}
+  return { found: false };
+}
+
 async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride = null) {
   if (!lobbyOverride && isLobbyGuest()) {
     showPlayerOsd(`Фильм выбирает главный: ${lobbyState.lobby?.hostUsername || 'хост'}`);
@@ -2404,7 +2681,17 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   filesTabDirty = true;
   if (lobbyOverride && lobbyOverride.balancer) {
     state.selectedBalancer = lobbyOverride.balancer;
+  } else {
+    if (itemSummary.type !== 'anime' && ['animevost', 'anilibria'].includes(state.selectedBalancer)) {
+      state.selectedBalancer = 'direct';
+    } else if (['kinokino', 'custom'].includes(state.selectedBalancer)) {
+      state.selectedBalancer = 'direct';
+    }
   }
+  if (state.selectedBalancer === 'kinogo' && sandboxToggle) {
+    sandboxToggle.checked = true;
+  }
+
   let effectiveImdbId = itemSummary.imdbId;
   if (effectiveImdbId === 'tt1321510' && /джентльмен|gentlemen/i.test(itemSummary.title || '')) {
     effectiveImdbId = 'tt13210838';
@@ -2422,7 +2709,7 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
     ...resolvedSummary,
     qualities: resolvedSummary.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
     providers: resolvedSummary.providers || [
-      { id: 'direct', name: 'СПБГУКА Direct HLS (Чистый поток • 0% рекламы)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' }
+      { id: 'direct', name: 'СПБГУКА Direct HLS (SSAI Ad-Shield)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' }
     ]
   };
 
@@ -2452,25 +2739,80 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
     providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
   };
 
-  // Run fast server metadata lookup (?fast=1) and parallel client mirror extraction simultaneously
-  const [detailedRes, initialClientData] = await Promise.all([
-    fetch(`/api/details?imdb=${encodeURIComponent(effectiveImdbId)}&title=${encodeURIComponent(resolvedSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`)
-      .then(r => r.json())
-      .catch(() => fallbackDetailed),
-    parseClientStreamBalancer(effectiveImdbId, effectiveKpId, state.selectedBalancer)
-  ]);
+  const fastDetailsUrl = `/api/details?imdb=${encodeURIComponent(effectiveImdbId)}&title=${encodeURIComponent(resolvedSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`;
+  let detailed = fallbackDetailed;
+  let clientData = null;
 
-  if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
-
-  const detailed = detailedRes || fallbackDetailed;
-  if (canonicalItem) {
-    detailed.kpId = effectiveKpId;
-  }
-  let clientData = initialClientData;
-
-  if ((!clientData || !clientData.found) && !effectiveKpId && detailed.kpId) {
-    clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, state.selectedBalancer);
+  if (state.selectedBalancer === 'animevost' || state.selectedBalancer === 'anilibria') {
+    const [detailedRes, altData] = await Promise.all([
+      fetch(fastDetailsUrl).then(r => r.json()).catch(() => fallbackDetailed),
+      resolveAlternativeSource(state.selectedBalancer, resolvedSummary)
+    ]);
     if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+    detailed = detailedRes || fallbackDetailed;
+    if (canonicalItem) detailed.kpId = effectiveKpId;
+
+    if (altData && altData.found && altData.seasons) {
+      detailed.hasDirectHls = true;
+      detailed.seasons = altData.seasons;
+      if (altData.voices?.length) detailed.voices = altData.voices;
+      if (altData.qualities?.length) detailed.qualities = altData.qualities;
+    } else {
+      const srcLabel = state.selectedBalancer === 'animevost' ? 'AnimeVost' : 'AniLibria';
+      showPlayerOsd(`Тайтл не найден на ${srcLabel} — переключено на Прямой HLS`);
+      state.selectedBalancer = 'direct';
+      clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, 'direct');
+      if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+      if (!clientData || !clientData.found) {
+        const srv = await fetchCollapsDetailsFallback(detailed, 'direct');
+        if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+        if (srv && srv.hasDirectHls && srv.seasons) {
+          clientData = { found: true, seasons: srv.seasons, voices: srv.voices, isSeries: srv.type !== 'movie', embedUrl: srv.embedUrl };
+        }
+      }
+    }
+  } else if (state.selectedBalancer === 'kinogo') {
+    const [detailedRes, seriesSkeleton] = await Promise.all([
+      fetch(fastDetailsUrl).then(r => r.json()).catch(() => fallbackDetailed),
+      resolvedSummary.type !== 'movie'
+        ? parseClientStreamBalancer(effectiveImdbId, effectiveKpId, 'direct')
+        : Promise.resolve(null)
+    ]);
+    if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+    detailed = detailedRes || fallbackDetailed;
+    if (canonicalItem) detailed.kpId = effectiveKpId;
+    clientData = seriesSkeleton;
+  } else {
+    const mirrorToQuery = isCollapsHlsBalancer(state.selectedBalancer) ? state.selectedBalancer : 'direct';
+    const [detailedRes, initialClientData] = await Promise.all([
+      fetch(fastDetailsUrl).then(r => r.json()).catch(() => fallbackDetailed),
+      parseClientStreamBalancer(effectiveImdbId, effectiveKpId, mirrorToQuery)
+    ]);
+    if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+
+    detailed = detailedRes || fallbackDetailed;
+    if (canonicalItem) detailed.kpId = effectiveKpId;
+    clientData = initialClientData;
+
+    if ((!clientData || !clientData.found) && !effectiveKpId && detailed.kpId) {
+      clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, mirrorToQuery);
+      if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+    }
+
+    // Server IP fallback if browser CORS/rate-limit prevented direct client extraction during binge watching
+    if (!clientData || !clientData.found) {
+      const serverFallback = await fetchCollapsDetailsFallback(detailed, mirrorToQuery);
+      if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+      if (serverFallback && serverFallback.hasDirectHls && serverFallback.seasons) {
+        clientData = {
+          found: true,
+          seasons: serverFallback.seasons,
+          voices: serverFallback.voices,
+          isSeries: serverFallback.type !== 'movie',
+          embedUrl: serverFallback.embedUrl
+        };
+      }
+    }
   }
 
   if (clientData && clientData.found) {
@@ -2483,6 +2825,12 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
       detailed.type = 'series';
     }
     detailed.embedUrl = clientData.embedUrl;
+    detailed._collapsBackup = {
+      seasons: clientData.seasons,
+      voices: detailed.voices,
+      qualities: detailed.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
+      embedUrl: clientData.embedUrl
+    };
   }
 
   state.currentItem = detailed;
@@ -2503,7 +2851,10 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   state.selectedVoice = initialSelection.name;
   if (!state.preferredVoice) state.preferredVoice = initialSelection.name;
 
-  state.selectedQuality = savedHistory?.quality || 'Авто (Макс. 1080p)';
+  const availQualities = item.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
+  state.selectedQuality = (savedHistory?.quality && availQualities.includes(savedHistory.quality))
+    ? savedHistory.quality
+    : availQualities[0];
 
   populateInfoTab(item);
   populatePlayerControls(item);
@@ -2637,8 +2988,29 @@ function renderSimilarTitles(item) {
   infoSimilarBlock.classList.remove('hidden');
 }
 
-function isDirectHlsBalancer(b) {
+function isCollapsHlsBalancer(b) {
   return ['direct', 'namy', 'kinogram', 'delivembd'].includes(b);
+}
+
+function isDirectHlsBalancer(b) {
+  return ['direct', 'namy', 'kinogram', 'delivembd', 'animevost', 'anilibria'].includes(b);
+}
+
+function updateSourceBadge(balancer, activeEp) {
+  if (!playerSourceBadge) return;
+  playerSourceBadge.className = 'live-indicator';
+  if (balancer === 'animevost' || activeEp?.streamType === 'mp4') {
+    playerSourceBadge.textContent = 'ANIMEVOST MP4';
+    playerSourceBadge.classList.add('source-animevost');
+  } else if (balancer === 'anilibria') {
+    playerSourceBadge.textContent = 'ANILIBRIA 1080P';
+    playerSourceBadge.classList.add('source-anilibria');
+  } else if (balancer === 'kinogo') {
+    playerSourceBadge.textContent = 'KINOGO';
+    playerSourceBadge.classList.add('source-kinogo');
+  } else {
+    playerSourceBadge.textContent = 'DIRECT HLS';
+  }
 }
 
 function isUsingHlsJs() {
@@ -2675,6 +3047,26 @@ function switchAudioTrackOrRestart(voiceName) {
 }
 
 function switchQualityLevel(qualityLabel) {
+  const activeEp = getActiveEpisodeObj(state.currentItem);
+  if (state.selectedBalancer === 'animevost' || activeEp?.streamType === 'mp4') {
+    if (!activeEp || !html5Video) return;
+    const wantSd = /^(480|360)/.test(String(qualityLabel || ''));
+    const nextUrl = wantSd ? (activeEp.mp4Std || activeEp.mp4Hd) : (activeEp.mp4Hd || activeEp.mp4Std);
+    if (!nextUrl || currentLoadedHlsUrl === nextUrl) return;
+
+    const curT = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
+    const wasPaused = html5Video.paused;
+    currentLoadedHlsUrl = nextUrl;
+    html5Video.src = nextUrl;
+    html5Video.load();
+    html5Video.addEventListener('loadedmetadata', () => {
+      if (curT > 1) {
+        try { html5Video.currentTime = curT; } catch (e) {}
+      }
+      if (!wasPaused) html5Video.play().catch(() => {});
+    }, { once: true });
+    return;
+  }
   if (isDirectHlsBalancer(state.selectedBalancer) && hlsInstance && hlsInstance.levels && hlsInstance.levels.length > 0) {
     if (qualityLabel.startsWith('Авто')) {
       hlsInstance.currentLevel = -1;
@@ -2913,12 +3305,18 @@ function populateFilesTab(item) {
 
   filesTreeContainer.querySelectorAll('.file-launch-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      const targetProv = btn.dataset.prov || 'direct';
       state.selectedVoice = btn.dataset.voice;
       state.selectedQuality = btn.dataset.quality;
-      state.selectedBalancer = isDirectHlsBalancer(btn.dataset.prov) ? btn.dataset.prov : 'direct';
+      switchModalTab('player');
+      const balancerBtn = balancerSelector?.querySelector(`.chip-btn[data-balancer="${targetProv}"]`);
+      if (balancerBtn && ['animevost', 'anilibria', 'kinogo', 'namy', 'kinogram', 'delivembd', 'direct', 'kinokino'].includes(targetProv)) {
+        balancerBtn.click();
+        return;
+      }
+      state.selectedBalancer = isDirectHlsBalancer(targetProv) ? targetProv : 'direct';
       updateBalancerButtons();
       populatePlayerControls(item);
-      switchModalTab('player');
       startPlayback(0, true);
       showPlayerOsd(`${state.selectedVoice} • ${state.selectedQuality}`);
     });
@@ -3501,8 +3899,14 @@ function seekRelative(deltaSeconds) {
 }
 
 function updateBalancerButtons() {
+  const isAnime = state.currentItem?.type === 'anime';
   balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.balancer === state.selectedBalancer);
+    const b = btn.dataset.balancer;
+    btn.classList.toggle('active', b === state.selectedBalancer);
+    const recommended = Boolean(state.currentItem) && (
+      isAnime ? (b === 'animevost' || b === 'anilibria') : (b === 'kinogo')
+    );
+    btn.classList.toggle('source-recommended', recommended);
   });
   customStreamRow.classList.toggle('hidden', state.selectedBalancer !== 'custom');
   sandboxRow.classList.toggle('hidden', isDirectHlsBalancer(state.selectedBalancer));
@@ -3539,10 +3943,14 @@ async function loadClientCleanEmbed(item, balancerName) {
 
         html = html
           .replace(/<head([^>]*)>/i, `<head$1><base href="${mirror}/">`)
-          .replace(/<script\s+data-name="ad">[\s\S]*?<\/script>/gi, '<script data-name="ad">var middleCount = 0, adTimeouts = {}, adsConfig = {};</script>')
+          .replace(/<script[^>]*data-name=["']?ss["']?[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<script[^>]*data-name=["']?ad["']?[^>]*>[\s\S]*?<\/script>/gi, '<script data-name="ad">var middleCount = 0, adTimeouts = {}, adsConfig = {};</script>')
           .replace(/ads:\s*adsConfig/g, 'ads: undefined')
           .replace(/distribrey\.com/gi, '')
-          .replace(/getsdk\.online/gi, '');
+          .replace(/getsdk\.online/gi, '')
+          .replace(/deltarockme\.com/gi, '')
+          .replace(/vak345\.com/gi, '')
+          .replace(/api\.stiven-king\.com/gi, '');
 
         balancerIframe.removeAttribute('src');
         balancerIframe.srcdoc = html;
@@ -3604,19 +4012,68 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
   if (!item) return;
 
   const myPlayToken = ++playbackRequestToken;
+  if (activeMp4FallbackHandler && html5Video) {
+    html5Video.removeEventListener('error', activeMp4FallbackHandler);
+    activeMp4FallbackHandler = null;
+  }
+
   const activeEp = getActiveEpisodeObj(item);
   const resolvedVoice = resolveVoiceSelection(item, activeEp, state.preferredVoice || state.selectedVoice);
   state.selectedVoice = resolvedVoice.name;
   const voiceIdx = resolvedVoice.trackIndex;
 
+  updateSourceBadge(state.selectedBalancer, activeEp);
   addToHistory(item, state.selectedSeason, state.selectedEpisode, state.selectedVoice, state.selectedQuality, resumeSeconds);
 
   const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
   const epPart = isEpisodic ? ` • Сезон ${state.selectedSeason}, Серия ${state.selectedEpisode}` : '';
   nowPlayingText.textContent = `${item.title}${epPart} • ${state.selectedVoice} • ${state.selectedQuality}`;
 
-  // Direct HLS Stream (used for Прямой HLS, Collaps HLS, Kinogram HLS, Delivembed HLS — 0% ads)
+  // Branch A: Direct MP4 Stream (AnimeVost — 0% ads)
   const streamUrl = activeEp?.rawHls || activeEp?.hlsUrl;
+  const isMp4Source = Boolean(activeEp && (activeEp.streamType === 'mp4' || (!streamUrl && (activeEp.mp4Hd || activeEp.mp4Std))));
+  if (isDirectHlsBalancer(state.selectedBalancer) && isMp4Source) {
+    iframePlayerWrap.classList.add('hidden');
+    balancerIframe.removeAttribute('srcdoc');
+    balancerIframe.src = 'about:blank';
+    directPlayerWrap.classList.remove('hidden');
+    setupSubtitles(activeEp);
+
+    const wantSd = /^(480|360)/.test(String(state.selectedQuality || ''));
+    const chosenMp4 = wantSd ? (activeEp.mp4Std || activeEp.mp4Hd) : (activeEp.mp4Hd || activeEp.mp4Std);
+    if (!forceReload && currentLoadedHlsUrl === chosenMp4 && html5Video.src) {
+      finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
+      return;
+    }
+
+    destroyHls();
+    currentLoadedHlsUrl = chosenMp4;
+    html5Video.poster = '';
+    html5Video.src = chosenMp4;
+
+    if (chosenMp4 === activeEp.mp4Hd && activeEp.mp4Std && activeEp.mp4Std !== activeEp.mp4Hd) {
+      activeMp4FallbackHandler = () => {
+        if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+        activeMp4FallbackHandler = null;
+        currentLoadedHlsUrl = activeEp.mp4Std;
+        html5Video.src = activeEp.mp4Std;
+        html5Video.load();
+        html5Video.addEventListener('loadedmetadata', () => {
+          if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+          finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
+        }, { once: true });
+      };
+      html5Video.addEventListener('error', activeMp4FallbackHandler, { once: true });
+    }
+
+    html5Video.addEventListener('loadedmetadata', () => {
+      if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+      finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
+    }, { once: true });
+    return;
+  }
+
+  // Branch B: Direct HLS Stream (Collaps mirrors + AniLibria — SSAI Ad-Shield)
   if (isDirectHlsBalancer(state.selectedBalancer) && streamUrl) {
     iframePlayerWrap.classList.add('hidden');
     balancerIframe.removeAttribute('srcdoc');
@@ -3635,20 +4092,25 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
       }
 
       destroyHls();
+      hlsRecoveryAttempts = 0;
       const manifestUrl = await buildClientHlsManifestUrl(streamUrl, voiceIdx, false);
       if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
 
       currentLoadedHlsUrl = streamUrl;
       html5Video.poster = '';
 
-      const activeHls = new window.Hls({
+      const pLoader = createAdShieldPlaylistLoader();
+      const hlsCfg = {
         enableWorker: true,
         lowLatencyMode: false,
         maxBufferLength: 30,
         maxMaxBufferLength: 60,
         backBufferLength: 30,
         capLevelToPlayerSize: true
-      });
+      };
+      if (pLoader) hlsCfg.pLoader = pLoader;
+
+      const activeHls = new window.Hls(hlsCfg);
       activeHls._desiredAudioTrackIdx = voiceIdx;
       hlsInstance = activeHls;
 
@@ -3660,6 +4122,38 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
         switchQualityLevel(state.selectedQuality);
         setupSubtitles(activeEp);
         finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
+      });
+
+      activeHls.on(window.Hls.Events.ERROR, async (event, data) => {
+        if (!data || !data.fatal) return;
+        if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+        if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR && hlsRecoveryAttempts < 1) {
+          hlsRecoveryAttempts++;
+          activeHls.recoverMediaError();
+          return;
+        }
+        if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && hlsRecoveryAttempts < 1 && isCollapsHlsBalancer(state.selectedBalancer)) {
+          hlsRecoveryAttempts++;
+          clearClientStreamCacheForItem(item.imdbId);
+          const curT = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : resumeSeconds;
+          showPlayerOsd('Обновление потока...');
+          try {
+            let refreshed = await parseClientStreamBalancer(item.imdbId, item.kpId, state.selectedBalancer);
+            if (!refreshed || !refreshed.found) {
+              const srv = await fetchCollapsDetailsFallback(item, state.selectedBalancer);
+              if (srv && srv.hasDirectHls && srv.seasons) {
+                refreshed = { found: true, seasons: srv.seasons, voices: srv.voices, embedUrl: srv.embedUrl };
+              }
+            }
+            if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+            if (refreshed && refreshed.found && refreshed.seasons) {
+              item.seasons = refreshed.seasons;
+              if (refreshed.voices?.length) item.voices = refreshed.voices;
+              if (refreshed.embedUrl) item.embedUrl = refreshed.embedUrl;
+              startPlayback(curT, true);
+            }
+          } catch (e) {}
+        }
       });
 
       activeHls.on(window.Hls.Events.AUDIO_TRACKS_UPDATED, () => applyDesiredAudioTrack(activeHls));
@@ -3684,7 +4178,38 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     }
   }
 
-  // Kinokino.vip embed source (Kinopoisk mirror)
+  // Branch C: Kinogo / Alloha independent embed source
+  if (state.selectedBalancer === 'kinogo') {
+    destroyHls();
+    html5Video.pause();
+    html5Video.removeAttribute('src');
+    directPlayerWrap.classList.add('hidden');
+    iframePlayerWrap.classList.remove('hidden');
+    kinoboxContainer.classList.add('hidden');
+    balancerIframe.classList.remove('hidden');
+    applyIframeSandbox();
+
+    nowPlayingText.textContent = `${item.title}${epPart} • Загрузка Kinogo...`;
+    const kinogoData = await resolveAlternativeSource('kinogo', item, isEpisodic ? {
+      season: state.selectedSeason,
+      episode: state.selectedEpisode
+    } : {});
+    if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+
+    if (kinogoData && kinogoData.found && kinogoData.embedUrl) {
+      balancerIframe.removeAttribute('srcdoc');
+      balancerIframe.src = kinogoData.embedUrl;
+      nowPlayingText.textContent = `${item.title}${epPart} • Kinogo (Alloha)`;
+      showPlayerOsd('Источник: Kinogo (Alloha)');
+    } else {
+      balancerIframe.removeAttribute('src');
+      balancerIframe.srcdoc = '<!DOCTYPE html><html><body style="margin:0;background:#09090b;color:#d4d4d8;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:20px;">На Kinogo этот тайтл не найден. Выберите «Прямой HLS» или другой источник.</body></html>';
+      showPlayerOsd('На Kinogo тайтл не найден — переключите на Прямой HLS');
+    }
+    return;
+  }
+
+  // Branch D: Kinokino.vip embed source (Kinopoisk mirror)
   if (state.selectedBalancer === 'kinokino') {
     destroyHls();
     html5Video.pause();
@@ -3696,14 +4221,14 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     applyIframeSandbox();
 
     const kpId = item.kpId || (item.id && /^\d+$/.test(item.id) ? item.id : '');
-    const isSeries = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
-    const query = isSeries ? `?season=${state.selectedSeason}&episode=${state.selectedEpisode}` : '';
-    const embedUrl = item.imdbId
-      ? `https://kinokino.vip/embed/imdb/${item.imdbId}${query}`
-      : `https://kinokino.vip/embed/kp/${kpId}${query}`;
-    balancerIframe.removeAttribute('srcdoc');
-    balancerIframe.src = embedUrl;
-    showPlayerOsd('Источник kinokino.vip загружен');
+    if (kpId) {
+      const isSeries = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+      balancerIframe.removeAttribute('srcdoc');
+      balancerIframe.src = `https://kinokino.vip/${isSeries ? 'series' : 'film'}/${kpId}/`;
+      showPlayerOsd('Источник kinokino.vip загружен');
+    } else {
+      await loadClientCleanEmbed(item, 'kinokino');
+    }
     return;
   }
 
@@ -3808,8 +4333,14 @@ function closeItemModal({ fromPopstate = false } = {}) {
   lastSmartOverlayKey = '';
   if (seekFeedbackLeft) seekFeedbackLeft.classList.add('hidden');
   if (seekFeedbackRight) seekFeedbackRight.classList.add('hidden');
+  if (activeMp4FallbackHandler && html5Video) {
+    html5Video.removeEventListener('error', activeMp4FallbackHandler);
+    activeMp4FallbackHandler = null;
+  }
   destroyHls();
   html5Video.pause();
+  html5Video.removeAttribute('src');
+  html5Video.load();
   balancerIframe.removeAttribute('srcdoc');
   balancerIframe.src = 'about:blank';
   itemModal.classList.add('hidden');
@@ -4558,43 +5089,115 @@ modalFavBtn.addEventListener('click', () => {
 balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const nextBalancer = btn.dataset.balancer;
-    state.selectedBalancer = nextBalancer;
-    updateBalancerButtons();
-    const resumeAt = html5Video.currentTime || 0;
+    const prevBalancer = state.selectedBalancer;
+    const item = state.currentItem;
+    const resumeAt = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
 
-    if (isDirectHlsBalancer(nextBalancer) && state.currentItem) {
+    if (item && !item._collapsBackup && isCollapsHlsBalancer(prevBalancer)) {
+      item._collapsBackup = {
+        seasons: item.seasons,
+        voices: item.voices,
+        qualities: item.qualities || ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'],
+        embedUrl: item.embedUrl
+      };
+    }
+
+    if ((nextBalancer === 'animevost' || nextBalancer === 'anilibria') && item) {
+      nowPlayingText.textContent = `Поиск на ${btn.textContent}...`;
+      const altData = await resolveAlternativeSource(nextBalancer, item);
+      if (item !== state.currentItem || itemModal.classList.contains('hidden')) return;
+
+      if (!altData || !altData.found || !altData.seasons) {
+        state.selectedBalancer = prevBalancer;
+        updateBalancerButtons();
+        showPlayerOsd(`«${item.title}» не найден на ${btn.textContent}`);
+        return;
+      }
+
+      state.selectedBalancer = nextBalancer;
+      item.seasons = altData.seasons;
+      if (altData.voices?.length) item.voices = altData.voices;
+      if (altData.qualities?.length) item.qualities = altData.qualities;
+
+      const sKeys = Object.keys(altData.seasons).map(Number).sort((a, b) => a - b);
+      if (!altData.seasons[state.selectedSeason]) {
+        state.selectedSeason = sKeys[0] || 1;
+      }
+      const eps = altData.seasons[state.selectedSeason] || [];
+      if (!eps.some(e => Number(e.episode) === Number(state.selectedEpisode))) {
+        state.selectedEpisode = eps[0]?.episode || 1;
+      }
+      state.selectedVoice = altData.voices?.[0] || btn.textContent;
+      state.selectedQuality = altData.qualities?.[0] || 'Авто (Макс. 1080p)';
+
+      updateBalancerButtons();
+      populatePlayerControls(item);
+      markFilesTabDirtyOrRefresh(item);
+      startPlayback(resumeAt, true);
+      showPlayerOsd(`Источник: ${btn.textContent} (без рекламы)`);
+      return;
+    }
+
+    state.selectedBalancer = nextBalancer;
+    if ((nextBalancer === 'kinogo' || nextBalancer === 'kinokino') && sandboxToggle) {
+      sandboxToggle.checked = true;
+    }
+    updateBalancerButtons();
+
+    if (nextBalancer === 'kinogo' && item) {
+      if (item._collapsBackup && !isCollapsHlsBalancer(prevBalancer)) {
+        item.seasons = item._collapsBackup.seasons;
+        if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
+        if (item._collapsBackup.qualities?.length) item.qualities = item._collapsBackup.qualities;
+        populatePlayerControls(item);
+      }
+      startPlayback(0, true);
+      return;
+    }
+
+    if (isCollapsHlsBalancer(nextBalancer) && item) {
       nowPlayingText.textContent = `Переключение зеркала (${btn.textContent})...`;
+      item.qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
+      state.selectedQuality = 'Авто (Макс. 1080p)';
+
       let updated = false;
-      try {
-        const clientData = await parseClientStreamBalancer(
-          state.currentItem.imdbId,
-          state.currentItem.kpId,
-          nextBalancer
-        );
-        if (clientData.found) {
-          state.currentItem.seasons = clientData.seasons;
-          if (clientData.voices && clientData.voices.length) state.currentItem.voices = clientData.voices;
-          if (clientData.embedUrl) state.currentItem.embedUrl = clientData.embedUrl;
+      if (nextBalancer === 'direct' && item._collapsBackup?.seasons) {
+        const firstEp = Object.values(item._collapsBackup.seasons)[0]?.[0];
+        if (firstEp?.rawHls || firstEp?.hlsUrl) {
+          item.seasons = item._collapsBackup.seasons;
+          if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
+          if (item._collapsBackup.embedUrl) item.embedUrl = item._collapsBackup.embedUrl;
           updated = true;
         }
-      } catch (e) {}
+      }
 
       if (!updated) {
         try {
-          const res = await fetch(
-            `/api/details?imdb=${encodeURIComponent(state.currentItem.imdbId)}&title=${encodeURIComponent(state.currentItem.title)}&mirror=${encodeURIComponent(nextBalancer)}`
-          );
-          const refreshed = await res.json();
-          if (refreshed && refreshed.seasons) {
-            state.currentItem.seasons = refreshed.seasons;
-            if (refreshed.voices && refreshed.voices.length) state.currentItem.voices = refreshed.voices;
-            if (refreshed.providers) state.currentItem.providers = refreshed.providers;
+          const clientData = await parseClientStreamBalancer(item.imdbId, item.kpId, nextBalancer);
+          if (clientData.found) {
+            item.seasons = clientData.seasons;
+            if (clientData.voices?.length) item.voices = clientData.voices;
+            if (clientData.embedUrl) item.embedUrl = clientData.embedUrl;
+            updated = true;
           }
         } catch (e) {}
       }
 
-      populatePlayerControls(state.currentItem);
-      markFilesTabDirtyOrRefresh(state.currentItem);
+      if (!updated) {
+        const refreshed = await fetchCollapsDetailsFallback(item, nextBalancer);
+        if (refreshed && refreshed.seasons) {
+          item.seasons = refreshed.seasons;
+          if (refreshed.voices?.length) item.voices = refreshed.voices;
+          if (refreshed.providers) item.providers = refreshed.providers;
+        }
+      }
+
+      if (item !== state.currentItem || itemModal.classList.contains('hidden')) return;
+      if (item.voices?.length && (prevBalancer === 'animevost' || prevBalancer === 'anilibria')) {
+        state.selectedVoice = item.voices[0];
+      }
+      populatePlayerControls(item);
+      markFilesTabDirtyOrRefresh(item);
       startPlayback(resumeAt, true);
       showPlayerOsd(`Источник: ${btn.textContent}`);
     } else {
@@ -4816,16 +5419,20 @@ if (vcDownloadBtn) {
     const item = state.currentItem;
     if (!item) return;
     const activeEp = getActiveEpisodeObj(item);
-    const streamUrl = activeEp?.rawHls || activeEp?.hlsUrl || (html5Video && html5Video.src ? html5Video.src : '');
-    const title = `${item.title}${item.type === 'series' ? `_S${state.selectedSeason}E${state.selectedEpisode}` : ''}`;
+    const streamUrl = (activeEp?.streamType === 'mp4' ? (activeEp.mp4Hd || activeEp.mp4Std) : '') ||
+      activeEp?.rawHls || activeEp?.hlsUrl || (html5Video && html5Video.src ? html5Video.src : '');
+    const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+    const title = `${item.title}${isEpisodic ? `_S${state.selectedSeason}E${state.selectedEpisode}` : ''}`;
     if (!streamUrl) {
       showPlayerOsd('Ссылка на поток не найдена');
       return;
     }
+    const isMp4 = /\.mp4(\?|$|#)/i.test(streamUrl);
+    const ext = isMp4 ? '.mp4' : '.m3u8';
     const downloadUrl = `/api/download-stream?url=${encodeURIComponent(streamUrl)}&title=${encodeURIComponent(title)}`;
     const a = document.createElement('a');
     a.href = downloadUrl;
-    a.download = `${title}.m3u8`;
+    a.download = `${title}${ext}`;
     a.target = '_blank';
     document.body.appendChild(a);
     a.click();
