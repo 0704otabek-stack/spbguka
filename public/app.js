@@ -2604,6 +2604,80 @@ function getActiveEpisodeObj(item) {
   return seasonList.find(ep => Number(ep.episode) === Number(state.selectedEpisode)) || seasonList[0] || null;
 }
 
+function describeAvailableEpisodes(seasonsMap) {
+  const keys = Object.keys(seasonsMap || {}).map(Number).filter(n => !Number.isNaN(n)).sort((a, b) => a - b);
+  if (keys.length === 0) return 'нет доступных серий';
+  if (keys.length === 1) {
+    const eps = seasonsMap[keys[0]] || [];
+    if (!eps.length) return 'нет доступных серий';
+    const first = Number(eps[0].episode) || 1;
+    const last = Number(eps[eps.length - 1].episode) || eps.length;
+    return first === last ? `доступна серия ${first}` : `доступны серии ${first}–${last}`;
+  }
+  return `доступно сезонов: ${keys.length}`;
+}
+
+function findMatchingEpisodeAcrossSources(targetSeasons, currentSeasons, desiredSeason, desiredEpisode) {
+  const tKeys = Object.keys(targetSeasons || {}).map(Number).filter(n => !Number.isNaN(n)).sort((a, b) => a - b);
+  if (tKeys.length === 0) return { found: false };
+
+  const ds = Number(desiredSeason) || 1;
+  const de = Number(desiredEpisode) || 1;
+
+  if (ds <= 1 && de <= 1) {
+    const firstS = tKeys.includes(1) ? 1 : tKeys[0];
+    const firstEps = targetSeasons[firstS] || [];
+    if (firstEps.length > 0) {
+      return { found: true, season: firstS, episode: Number(firstEps[0].episode) || 1 };
+    }
+    return { found: false };
+  }
+
+  // 1. Exact season + episode match
+  if (Array.isArray(targetSeasons[ds])) {
+    const exact = targetSeasons[ds].find(e => Number(e.episode) === de);
+    if (exact) {
+      return { found: true, season: ds, episode: Number(exact.episode) };
+    }
+  }
+
+  // 2. Cumulative 1-based episode index mapping when sources split seasons differently (e.g., flat S1 vs S1+S2)
+  let absIdx = 0;
+  if (currentSeasons && typeof currentSeasons === 'object') {
+    const cKeys = Object.keys(currentSeasons).map(Number).filter(n => !Number.isNaN(n)).sort((a, b) => a - b);
+    let count = 0;
+    for (const sk of cKeys) {
+      const eps = currentSeasons[sk] || [];
+      if (sk === ds) {
+        const idx = eps.findIndex(e => Number(e.episode) === de);
+        if (idx !== -1) {
+          absIdx = count + idx + 1;
+        }
+        break;
+      }
+      count += eps.length;
+    }
+  } else if (ds === 1) {
+    absIdx = de;
+  }
+
+  if (absIdx > 0) {
+    let remaining = absIdx;
+    for (const tk of tKeys) {
+      const eps = targetSeasons[tk] || [];
+      if (remaining <= eps.length) {
+        const matched = eps[remaining - 1];
+        if (matched) {
+          return { found: true, season: tk, episode: Number(matched.episode) || remaining };
+        }
+      }
+      remaining -= eps.length;
+    }
+  }
+
+  return { found: false };
+}
+
 function clearClientStreamCacheForItem(imdbId) {
   if (!imdbId) return;
   for (const key of clientStreamCache.keys()) {
@@ -2739,6 +2813,8 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
     providers: [{ id: 'direct', name: 'Прямой HLS', badge: '1080p', speed: '110 Мбит/с' }]
   };
 
+  const savedDesiredSeason = lobbyOverride?.season || savedHistory?.season || 1;
+  const savedDesiredEpisode = lobbyOverride?.episode || savedHistory?.episode || 1;
   const fastDetailsUrl = `/api/details?imdb=${encodeURIComponent(effectiveImdbId)}&title=${encodeURIComponent(resolvedSummary.title)}&mirror=${encodeURIComponent(state.selectedBalancer)}&fast=1`;
   let detailed = fallbackDetailed;
   let clientData = null;
@@ -2752,14 +2828,23 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
     detailed = detailedRes || fallbackDetailed;
     if (canonicalItem) detailed.kpId = effectiveKpId;
 
-    if (altData && altData.found && altData.seasons) {
+    const srcLabel = state.selectedBalancer === 'animevost' ? 'AnimeVost' : 'AniLibria';
+    const epMatch = (altData && altData.found && altData.seasons)
+      ? findMatchingEpisodeAcrossSources(altData.seasons, null, savedDesiredSeason, savedDesiredEpisode)
+      : { found: false };
+
+    if (altData && altData.found && altData.seasons && epMatch.found) {
       detailed.hasDirectHls = true;
       detailed.seasons = altData.seasons;
       if (altData.voices?.length) detailed.voices = altData.voices;
       if (altData.qualities?.length) detailed.qualities = altData.qualities;
     } else {
-      const srcLabel = state.selectedBalancer === 'animevost' ? 'AnimeVost' : 'AniLibria';
-      showPlayerOsd(`Тайтл не найден на ${srcLabel} — переключено на Прямой HLS`);
+      if (altData && altData.found && altData.seasons && !epMatch.found) {
+        const seasonPrefix = savedDesiredSeason > 1 ? `${savedDesiredSeason} сезон ` : '';
+        showPlayerOsd(`На ${srcLabel} нет ${seasonPrefix}серии ${savedDesiredEpisode} (${describeAvailableEpisodes(altData.seasons)}) — открыт Прямой HLS`);
+      } else {
+        showPlayerOsd(`Тайтл не найден на ${srcLabel} — переключено на Прямой HLS`);
+      }
       state.selectedBalancer = 'direct';
       clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, 'direct');
       if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
@@ -4050,26 +4135,26 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     currentLoadedHlsUrl = chosenMp4;
     html5Video.poster = '';
     html5Video.src = chosenMp4;
+    let mp4Started = false;
+    const startMp4Once = () => {
+      if (mp4Started || myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+      mp4Started = true;
+      finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
+    };
 
     if (chosenMp4 === activeEp.mp4Hd && activeEp.mp4Std && activeEp.mp4Std !== activeEp.mp4Hd) {
       activeMp4FallbackHandler = () => {
-        if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+        if (mp4Started || myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
         activeMp4FallbackHandler = null;
         currentLoadedHlsUrl = activeEp.mp4Std;
         html5Video.src = activeEp.mp4Std;
         html5Video.load();
-        html5Video.addEventListener('loadedmetadata', () => {
-          if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
-          finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
-        }, { once: true });
+        html5Video.addEventListener('loadedmetadata', startMp4Once, { once: true });
       };
       html5Video.addEventListener('error', activeMp4FallbackHandler, { once: true });
     }
 
-    html5Video.addEventListener('loadedmetadata', () => {
-      if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
-      finishLobbyOrNormalPlay(html5Video, resumeSeconds, lobbyStartOpts);
-    }, { once: true });
+    html5Video.addEventListener('loadedmetadata', startMp4Once, { once: true });
     return;
   }
 
@@ -5090,6 +5175,7 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const nextBalancer = btn.dataset.balancer;
     const prevBalancer = state.selectedBalancer;
+    const prevNowPlaying = nowPlayingText.textContent;
     const item = state.currentItem;
     const resumeAt = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
 
@@ -5109,8 +5195,24 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
 
       if (!altData || !altData.found || !altData.seasons) {
         state.selectedBalancer = prevBalancer;
+        nowPlayingText.textContent = prevNowPlaying;
         updateBalancerButtons();
         showPlayerOsd(`«${item.title}» не найден на ${btn.textContent}`);
+        return;
+      }
+
+      const epMatch = findMatchingEpisodeAcrossSources(
+        altData.seasons,
+        item.seasons,
+        state.selectedSeason,
+        state.selectedEpisode
+      );
+      if (!epMatch.found) {
+        state.selectedBalancer = prevBalancer;
+        nowPlayingText.textContent = prevNowPlaying;
+        updateBalancerButtons();
+        const seasonPrefix = state.selectedSeason > 1 ? `сезона ${state.selectedSeason}, ` : '';
+        showPlayerOsd(`На ${btn.textContent} нет ${seasonPrefix}серии ${state.selectedEpisode} (${describeAvailableEpisodes(altData.seasons)}) — оставлен текущий источник`);
         return;
       }
 
@@ -5119,14 +5221,8 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
       if (altData.voices?.length) item.voices = altData.voices;
       if (altData.qualities?.length) item.qualities = altData.qualities;
 
-      const sKeys = Object.keys(altData.seasons).map(Number).sort((a, b) => a - b);
-      if (!altData.seasons[state.selectedSeason]) {
-        state.selectedSeason = sKeys[0] || 1;
-      }
-      const eps = altData.seasons[state.selectedSeason] || [];
-      if (!eps.some(e => Number(e.episode) === Number(state.selectedEpisode))) {
-        state.selectedEpisode = eps[0]?.episode || 1;
-      }
+      state.selectedSeason = epMatch.season;
+      state.selectedEpisode = epMatch.episode;
       state.selectedVoice = altData.voices?.[0] || btn.textContent;
       state.selectedQuality = altData.qualities?.[0] || 'Авто (Макс. 1080p)';
 
@@ -5146,7 +5242,17 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
 
     if (nextBalancer === 'kinogo' && item) {
       if (item._collapsBackup && !isCollapsHlsBalancer(prevBalancer)) {
+        const epMatch = findMatchingEpisodeAcrossSources(
+          item._collapsBackup.seasons,
+          item.seasons,
+          state.selectedSeason,
+          state.selectedEpisode
+        );
         item.seasons = item._collapsBackup.seasons;
+        if (epMatch.found) {
+          state.selectedSeason = epMatch.season;
+          state.selectedEpisode = epMatch.episode;
+        }
         if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
         if (item._collapsBackup.qualities?.length) item.qualities = item._collapsBackup.qualities;
         populatePlayerControls(item);
@@ -5157,42 +5263,66 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
 
     if (isCollapsHlsBalancer(nextBalancer) && item) {
       nowPlayingText.textContent = `Переключение зеркала (${btn.textContent})...`;
-      item.qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
-      state.selectedQuality = 'Авто (Макс. 1080p)';
+      let nextSeasons = null;
+      let nextVoices = null;
+      let nextEmbedUrl = null;
+      let nextProviders = null;
 
-      let updated = false;
       if (nextBalancer === 'direct' && item._collapsBackup?.seasons) {
         const firstEp = Object.values(item._collapsBackup.seasons)[0]?.[0];
         if (firstEp?.rawHls || firstEp?.hlsUrl) {
-          item.seasons = item._collapsBackup.seasons;
-          if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
-          if (item._collapsBackup.embedUrl) item.embedUrl = item._collapsBackup.embedUrl;
-          updated = true;
+          nextSeasons = item._collapsBackup.seasons;
+          nextVoices = item._collapsBackup.voices;
+          nextEmbedUrl = item._collapsBackup.embedUrl;
         }
       }
 
-      if (!updated) {
+      if (!nextSeasons) {
         try {
           const clientData = await parseClientStreamBalancer(item.imdbId, item.kpId, nextBalancer);
-          if (clientData.found) {
-            item.seasons = clientData.seasons;
-            if (clientData.voices?.length) item.voices = clientData.voices;
-            if (clientData.embedUrl) item.embedUrl = clientData.embedUrl;
-            updated = true;
+          if (clientData.found && clientData.seasons) {
+            nextSeasons = clientData.seasons;
+            nextVoices = clientData.voices;
+            nextEmbedUrl = clientData.embedUrl;
           }
         } catch (e) {}
       }
 
-      if (!updated) {
+      if (!nextSeasons) {
         const refreshed = await fetchCollapsDetailsFallback(item, nextBalancer);
         if (refreshed && refreshed.seasons) {
-          item.seasons = refreshed.seasons;
-          if (refreshed.voices?.length) item.voices = refreshed.voices;
-          if (refreshed.providers) item.providers = refreshed.providers;
+          nextSeasons = refreshed.seasons;
+          nextVoices = refreshed.voices;
+          nextProviders = refreshed.providers;
         }
       }
 
       if (item !== state.currentItem || itemModal.classList.contains('hidden')) return;
+
+      if (nextSeasons) {
+        const epMatch = findMatchingEpisodeAcrossSources(
+          nextSeasons,
+          item.seasons,
+          state.selectedSeason,
+          state.selectedEpisode
+        );
+        if (!epMatch.found) {
+          state.selectedBalancer = prevBalancer;
+          nowPlayingText.textContent = prevNowPlaying;
+          updateBalancerButtons();
+          showPlayerOsd(`На ${btn.textContent} нет серии ${state.selectedEpisode} (${describeAvailableEpisodes(nextSeasons)}) — оставлен текущий источник`);
+          return;
+        }
+        item.seasons = nextSeasons;
+        state.selectedSeason = epMatch.season;
+        state.selectedEpisode = epMatch.episode;
+        if (nextVoices?.length) item.voices = nextVoices;
+        if (nextEmbedUrl) item.embedUrl = nextEmbedUrl;
+        if (nextProviders) item.providers = nextProviders;
+      }
+
+      item.qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
+      state.selectedQuality = 'Авто (Макс. 1080p)';
       if (item.voices?.length && (prevBalancer === 'animevost' || prevBalancer === 'anilibria')) {
         state.selectedVoice = item.voices[0];
       }
