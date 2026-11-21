@@ -123,6 +123,15 @@ let hlsRecoveryAttempts = 0;
 let activeMp4FallbackHandler = null;
 
 function getClientMirrorList(preferredMirror = 'direct') {
+  if (preferredMirror === 'kinogo') {
+    return [
+      'https://api.embf.net',
+      'https://api.kinogram.best',
+      'https://api.namy.ws',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
+    ];
+  }
   if (preferredMirror === 'kinokino') {
     return [
       'https://kinokino.vip',
@@ -2746,6 +2755,42 @@ async function resolveAlternativeSource(balancer, item, opts = {}) {
   return { found: false };
 }
 
+async function resolveKinogoClientOrServer(item, epOpts = {}) {
+  if (!item) return { found: false };
+  const paths = [];
+  if (item.imdbId) paths.push(`/embed/imdb/${encodeURIComponent(item.imdbId)}`);
+  if (item.kpId) paths.push(`/embed/kp/${encodeURIComponent(item.kpId)}`);
+
+  if (paths.length > 0) {
+    try {
+      const embfData = await probeClientMirror('https://api.embf.net', paths);
+      if (embfData && embfData.found && embfData.seasons) {
+        return {
+          found: true,
+          mode: 'hls',
+          seasons: embfData.seasons,
+          voices: embfData.voices,
+          isSeries: embfData.isSeries,
+          embedUrl: embfData.embedUrl
+        };
+      }
+    } catch (e) {}
+  }
+
+  const srvData = await resolveAlternativeSource('kinogo', item, epOpts);
+  if (srvData && srvData.found) {
+    return {
+      found: true,
+      mode: srvData.mode || (srvData.seasons ? 'hls' : 'embed'),
+      seasons: srvData.seasons,
+      voices: srvData.voices,
+      isSeries: srvData.isSeries,
+      embedUrl: srvData.embedUrl
+    };
+  }
+  return { found: false };
+}
+
 async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride = null) {
   if (!lobbyOverride && isLobbyGuest()) {
     showPlayerOsd(`Фильм выбирает главный: ${lobbyState.lobby?.hostUsername || 'хост'}`);
@@ -2857,16 +2902,36 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
       }
     }
   } else if (state.selectedBalancer === 'kinogo') {
-    const [detailedRes, seriesSkeleton] = await Promise.all([
+    const [detailedRes, initialKinogo] = await Promise.all([
       fetch(fastDetailsUrl).then(r => r.json()).catch(() => fallbackDetailed),
-      resolvedSummary.type !== 'movie'
-        ? parseClientStreamBalancer(effectiveImdbId, effectiveKpId, 'direct')
-        : Promise.resolve(null)
+      resolveKinogoClientOrServer(resolvedSummary)
     ]);
     if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
     detailed = detailedRes || fallbackDetailed;
     if (canonicalItem) detailed.kpId = effectiveKpId;
-    clientData = seriesSkeleton;
+
+    let kinogoRes = initialKinogo;
+    if ((!kinogoRes || !kinogoRes.found) && !effectiveKpId && detailed.kpId) {
+      kinogoRes = await resolveKinogoClientOrServer(detailed);
+      if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+    }
+
+    if (kinogoRes && kinogoRes.found && kinogoRes.mode === 'hls' && kinogoRes.seasons) {
+      delete detailed._kinogoFallbackEmbedUrl;
+      clientData = {
+        found: true,
+        seasons: kinogoRes.seasons,
+        voices: kinogoRes.voices,
+        isSeries: kinogoRes.isSeries,
+        embedUrl: kinogoRes.embedUrl
+      };
+    } else if (kinogoRes && kinogoRes.found && kinogoRes.mode === 'embed' && kinogoRes.embedUrl) {
+      detailed._kinogoFallbackEmbedUrl = kinogoRes.embedUrl;
+      if (resolvedSummary.type !== 'movie') {
+        clientData = await parseClientStreamBalancer(detailed.imdbId, detailed.kpId, 'direct').catch(() => null);
+        if (myOpenToken !== modalOpenToken || itemModal.classList.contains('hidden')) return;
+      }
+    }
   } else {
     const mirrorToQuery = isCollapsHlsBalancer(state.selectedBalancer) ? state.selectedBalancer : 'direct';
     const [detailedRes, initialClientData] = await Promise.all([
@@ -3078,7 +3143,7 @@ function isCollapsHlsBalancer(b) {
 }
 
 function isDirectHlsBalancer(b) {
-  return ['direct', 'namy', 'kinogram', 'delivembd', 'animevost', 'anilibria'].includes(b);
+  return ['direct', 'namy', 'kinogram', 'delivembd', 'kinogo', 'animevost', 'anilibria'].includes(b);
 }
 
 function updateSourceBadge(balancer, activeEp) {
@@ -3091,7 +3156,7 @@ function updateSourceBadge(balancer, activeEp) {
     playerSourceBadge.textContent = 'ANILIBRIA 1080P';
     playerSourceBadge.classList.add('source-anilibria');
   } else if (balancer === 'kinogo') {
-    playerSourceBadge.textContent = 'KINOGO';
+    playerSourceBadge.textContent = 'KINOGO HLS';
     playerSourceBadge.classList.add('source-kinogo');
   } else {
     playerSourceBadge.textContent = 'DIRECT HLS';
@@ -3994,7 +4059,8 @@ function updateBalancerButtons() {
     btn.classList.toggle('source-recommended', recommended);
   });
   customStreamRow.classList.toggle('hidden', state.selectedBalancer !== 'custom');
-  sandboxRow.classList.toggle('hidden', isDirectHlsBalancer(state.selectedBalancer));
+  const usingKinogoEmbedFallback = state.selectedBalancer === 'kinogo' && Boolean(state.currentItem?._kinogoFallbackEmbedUrl);
+  sandboxRow.classList.toggle('hidden', isDirectHlsBalancer(state.selectedBalancer) && !usingKinogoEmbedFallback);
 }
 
 function destroyHls() {
@@ -4217,7 +4283,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
           activeHls.recoverMediaError();
           return;
         }
-        if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && hlsRecoveryAttempts < 1 && isCollapsHlsBalancer(state.selectedBalancer)) {
+        if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR && hlsRecoveryAttempts < 1 && (isCollapsHlsBalancer(state.selectedBalancer) || state.selectedBalancer === 'kinogo')) {
           hlsRecoveryAttempts++;
           clearClientStreamCacheForItem(item.imdbId);
           const curT = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : resumeSeconds;
@@ -4263,7 +4329,7 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     }
   }
 
-  // Branch C: Kinogo / Alloha independent embed source
+  // Branch C: Kinogo rare fallback embed (only used if Player 1 Direct HLS was unavailable)
   if (state.selectedBalancer === 'kinogo') {
     destroyHls();
     html5Video.pause();
@@ -4272,20 +4338,27 @@ async function startPlayback(resumeSeconds = 0, forceReload = false, lobbyStartO
     iframePlayerWrap.classList.remove('hidden');
     kinoboxContainer.classList.add('hidden');
     balancerIframe.classList.remove('hidden');
+    if (sandboxRow) sandboxRow.classList.remove('hidden');
     applyIframeSandbox();
 
-    nowPlayingText.textContent = `${item.title}${epPart} • Загрузка Kinogo...`;
-    const kinogoData = await resolveAlternativeSource('kinogo', item, isEpisodic ? {
-      season: state.selectedSeason,
-      episode: state.selectedEpisode
-    } : {});
-    if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+    let fallbackUrl = item._kinogoFallbackEmbedUrl || '';
+    if (!fallbackUrl) {
+      nowPlayingText.textContent = `${item.title}${epPart} • Загрузка Kinogo...`;
+      const kinogoData = await resolveAlternativeSource('kinogo', item, isEpisodic ? {
+        season: state.selectedSeason,
+        episode: state.selectedEpisode
+      } : {});
+      if (myPlayToken !== playbackRequestToken || itemModal.classList.contains('hidden')) return;
+      if (kinogoData && kinogoData.found) {
+        fallbackUrl = kinogoData.embedUrl || '';
+      }
+    }
 
-    if (kinogoData && kinogoData.found && kinogoData.embedUrl) {
+    if (fallbackUrl) {
       balancerIframe.removeAttribute('srcdoc');
-      balancerIframe.src = kinogoData.embedUrl;
-      nowPlayingText.textContent = `${item.title}${epPart} • Kinogo (Alloha)`;
-      showPlayerOsd('Источник: Kinogo (Alloha)');
+      balancerIframe.src = fallbackUrl;
+      nowPlayingText.textContent = `${item.title}${epPart} • Kinogo (Резерв)`;
+      showPlayerOsd('Kinogo: открыт резервный iframe-плеер');
     } else {
       balancerIframe.removeAttribute('src');
       balancerIframe.srcdoc = '<!DOCTYPE html><html><body style="margin:0;background:#09090b;color:#d4d4d8;display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;text-align:center;padding:20px;">На Kinogo этот тайтл не найден. Выберите «Прямой HLS» или другой источник.</body></html>';
@@ -5234,32 +5307,86 @@ balancerSelector.querySelectorAll('.chip-btn').forEach(btn => {
       return;
     }
 
-    state.selectedBalancer = nextBalancer;
-    if ((nextBalancer === 'kinogo' || nextBalancer === 'kinokino') && sandboxToggle) {
-      sandboxToggle.checked = true;
-    }
-    updateBalancerButtons();
-
     if (nextBalancer === 'kinogo' && item) {
-      if (item._collapsBackup && !isCollapsHlsBalancer(prevBalancer)) {
+      nowPlayingText.textContent = 'Подключение Kinogo (без рекламы)...';
+      const isEpisodic = item.type === 'series' || item.type === 'anime' || item.type === 'cartoon';
+      const kinogoRes = await resolveKinogoClientOrServer(item, isEpisodic ? {
+        season: state.selectedSeason,
+        episode: state.selectedEpisode
+      } : {});
+      if (item !== state.currentItem || itemModal.classList.contains('hidden')) return;
+
+      if (kinogoRes && kinogoRes.found && kinogoRes.mode === 'hls' && kinogoRes.seasons) {
         const epMatch = findMatchingEpisodeAcrossSources(
-          item._collapsBackup.seasons,
+          kinogoRes.seasons,
           item.seasons,
           state.selectedSeason,
           state.selectedEpisode
         );
-        item.seasons = item._collapsBackup.seasons;
-        if (epMatch.found) {
-          state.selectedSeason = epMatch.season;
-          state.selectedEpisode = epMatch.episode;
+        if (!epMatch.found) {
+          state.selectedBalancer = prevBalancer;
+          nowPlayingText.textContent = prevNowPlaying;
+          updateBalancerButtons();
+          showPlayerOsd(`На Kinogo нет серии ${state.selectedEpisode} (${describeAvailableEpisodes(kinogoRes.seasons)}) — оставлен текущий источник`);
+          return;
         }
-        if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
-        if (item._collapsBackup.qualities?.length) item.qualities = item._collapsBackup.qualities;
+        delete item._kinogoFallbackEmbedUrl;
+        state.selectedBalancer = 'kinogo';
+        item.seasons = kinogoRes.seasons;
+        state.selectedSeason = epMatch.season;
+        state.selectedEpisode = epMatch.episode;
+        item.qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
+        state.selectedQuality = 'Авто (Макс. 1080p)';
+        if (kinogoRes.voices?.length) item.voices = kinogoRes.voices;
+        if (prevBalancer === 'animevost' || prevBalancer === 'anilibria') {
+          state.selectedVoice = item.voices?.[0] || state.selectedVoice;
+        }
+        updateBalancerButtons();
         populatePlayerControls(item);
+        markFilesTabDirtyOrRefresh(item);
+        startPlayback(resumeAt, true);
+        showPlayerOsd('Источник: Kinogo HLS (без рекламы)');
+        return;
       }
-      startPlayback(0, true);
+
+      if (kinogoRes && kinogoRes.found && kinogoRes.mode === 'embed' && kinogoRes.embedUrl) {
+        item._kinogoFallbackEmbedUrl = kinogoRes.embedUrl;
+        state.selectedBalancer = 'kinogo';
+        if (sandboxToggle) sandboxToggle.checked = true;
+        if (item._collapsBackup && !isCollapsHlsBalancer(prevBalancer)) {
+          const epMatch = findMatchingEpisodeAcrossSources(
+            item._collapsBackup.seasons,
+            item.seasons,
+            state.selectedSeason,
+            state.selectedEpisode
+          );
+          item.seasons = item._collapsBackup.seasons;
+          if (epMatch.found) {
+            state.selectedSeason = epMatch.season;
+            state.selectedEpisode = epMatch.episode;
+          }
+          if (item._collapsBackup.voices?.length) item.voices = item._collapsBackup.voices;
+          if (item._collapsBackup.qualities?.length) item.qualities = item._collapsBackup.qualities;
+          populatePlayerControls(item);
+        }
+        updateBalancerButtons();
+        startPlayback(0, true);
+        return;
+      }
+
+      state.selectedBalancer = prevBalancer;
+      nowPlayingText.textContent = prevNowPlaying;
+      updateBalancerButtons();
+      showPlayerOsd(`«${item.title}» не найден на Kinogo — оставлен текущий источник`);
       return;
     }
+
+    state.selectedBalancer = nextBalancer;
+    if (item && nextBalancer !== 'kinogo') delete item._kinogoFallbackEmbedUrl;
+    if ((nextBalancer === 'kinogo' || nextBalancer === 'kinokino') && sandboxToggle) {
+      sandboxToggle.checked = true;
+    }
+    updateBalancerButtons();
 
     if (isCollapsHlsBalancer(nextBalancer) && item) {
       nowPlayingText.textContent = `Переключение зеркала (${btn.textContent})...`;

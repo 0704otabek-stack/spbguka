@@ -38,6 +38,15 @@ let kinogoConfigCache = {
 };
 
 function getMirrorList(preferredMirror = 'direct') {
+  if (preferredMirror === 'kinogo') {
+    return [
+      'https://api.embf.net',
+      'https://api.kinogram.best',
+      'https://api.namy.ws',
+      'https://api.embess.ws',
+      'https://api.delivembd.ws'
+    ];
+  }
   if (preferredMirror === 'kinokino') {
     return [
       'https://kinokino.vip',
@@ -194,6 +203,113 @@ function extractSubtitlesFromBlock(mkBlock) {
   return [];
 }
 
+function parseMakePlayerFromHtml(html, embedUrl) {
+  const mkIdx = html.lastIndexOf('makePlayer({');
+  if (mkIdx === -1) return null;
+
+  // Extract dynamic token appended to HLS URLs by VenomPlayer (e.g. var lok = 1, b21c6fc3 = "907cc0b0")
+  const tokenMatch = html.match(/var\s+lok\s*=\s*\d+\s*,\s*\w+\s*=\s*"([^"]+)"/);
+  const token = tokenMatch?.[1] || '';
+  const mkBlock = html.slice(mkIdx);
+
+  // Case 1: Series / Cartoon / Anime with playlist.seasons
+  const sIdx = mkBlock.indexOf('seasons:');
+  if (sIdx !== -1) {
+    const jsonStr = extractJsonArray(mkBlock, sIdx);
+    if (jsonStr) {
+      const rawSeasons = JSON.parse(jsonStr);
+      const seasonsMap = {};
+      const allVoicesSet = new Set();
+
+      for (const sObj of rawSeasons) {
+        const sNum = Number(sObj.season) || 1;
+        seasonsMap[sNum] = [];
+        for (const ep of (sObj.episodes || [])) {
+          const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
+          const voiceTracks = normalizeAudioTracks(ep.audio?.names, ep.audio?.order);
+          const epVoices = voiceTracks.map(t => t.name);
+          epVoices.forEach(v => allVoicesSet.add(v));
+
+          const rawEpHls = ep.hls ? ep.hls.replace(/\\u0026/g, '&').replace(/\\\//g, '/') : '';
+          const signedHls = rawEpHls ? (token ? `${rawEpHls}&${token}` : rawEpHls) : '';
+          seasonsMap[sNum].push({
+            season: sNum,
+            episode: epNum,
+            title: ep.title || `Серия ${epNum}`,
+            duration: Math.round((ep.duration || 2700) / 60),
+            hlsUrl: signedHls ? `/api/hls-proxy?url=${encodeURIComponent(signedHls)}` : '',
+            rawHls: signedHls,
+            voices: epVoices,
+            voiceTracks,
+            subtitles: (ep.cc || []).map(c => ({
+              name: c.name,
+              url: `/api/hls-proxy?url=${encodeURIComponent(c.url)}`
+            }))
+          });
+        }
+      }
+
+      return {
+        found: true,
+        isSeries: true,
+        embedUrl,
+        seasons: seasonsMap,
+        voices: Array.from(allVoicesSet)
+      };
+    }
+  }
+
+  // Case 2: Movie with source: { hls, audio, cc }
+  const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
+  if (hlsMatch) {
+    const rawMovieHls = hlsMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+    const signedHls = token ? `${rawMovieHls}&${token}` : rawMovieHls;
+    const voiceTracks = extractAudioFromBlock(mkBlock);
+    const voices = voiceTracks.map(t => t.name);
+    const hlsProxyUrl = `/api/hls-proxy?url=${encodeURIComponent(signedHls)}`;
+    return {
+      found: true,
+      isSeries: false,
+      embedUrl,
+      voices,
+      seasons: {
+        1: [
+          {
+            season: 1,
+            episode: 1,
+            title: 'Полный фильм',
+            duration: 130,
+            hlsUrl: hlsProxyUrl,
+            rawHls: signedHls,
+            voices,
+            voiceTracks,
+            subtitles: extractSubtitlesFromBlock(mkBlock)
+          }
+        ]
+      }
+    };
+  }
+
+  return null;
+}
+
+async function fetchMakePlayerStream(embedUrl, extraHeaders = {}) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    const r = await fetch(embedUrl, {
+      headers: { 'User-Agent': UPSTREAM_UA, ...extraHeaders },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!r.ok) return null;
+    const html = await r.text();
+    return parseMakePlayerFromHtml(html, embedUrl);
+  } catch (e) {
+    return null;
+  }
+}
+
 // Parse real HLS streams, seasons, episodes, and Russian studio voiceover tracks from Namy / Kinogram / Embess / Delivembd balancers
 async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct') {
   const cacheKey = `${imdbId || ''}:${kpId || ''}:${preferredMirror}`;
@@ -210,110 +326,10 @@ async function parseLiveStreamBalancer(imdbId, kpId, preferredMirror = 'direct')
 
   for (const mirror of mirrors) {
     for (const p of paths) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 7000);
-        const r = await fetch(mirror + p, {
-          headers: { 'User-Agent': UPSTREAM_UA },
-          signal: controller.signal
-        });
-        clearTimeout(timeout);
-        if (!r.ok) continue;
-
-        const html = await r.text();
-        const mkIdx = html.lastIndexOf('makePlayer({');
-        if (mkIdx === -1) continue;
-
-        // Extract dynamic token appended to HLS URLs by VenomPlayer (e.g. var lok = 1, b21c6fc3 = "907cc0b0")
-        const tokenMatch = html.match(/var\s+lok\s*=\s*\d+\s*,\s*\w+\s*=\s*"([^"]+)"/);
-        const token = tokenMatch?.[1] || '';
-
-        const mkBlock = html.slice(mkIdx);
-
-        // Case 1: Series / Cartoon / Anime with playlist.seasons
-        const sIdx = mkBlock.indexOf('seasons:');
-        if (sIdx !== -1) {
-          const jsonStr = extractJsonArray(mkBlock, sIdx);
-          if (jsonStr) {
-            const rawSeasons = JSON.parse(jsonStr);
-            const seasonsMap = {};
-            const allVoicesSet = new Set();
-
-            for (const sObj of rawSeasons) {
-              const sNum = Number(sObj.season) || 1;
-              seasonsMap[sNum] = [];
-              for (const ep of (sObj.episodes || [])) {
-                const epNum = Number(ep.episode) || seasonsMap[sNum].length + 1;
-                const voiceTracks = normalizeAudioTracks(ep.audio?.names, ep.audio?.order);
-                const epVoices = voiceTracks.map(t => t.name);
-                epVoices.forEach(v => allVoicesSet.add(v));
-
-                const rawEpHls = ep.hls ? ep.hls.replace(/\\u0026/g, '&').replace(/\\\//g, '/') : '';
-                const signedHls = rawEpHls ? (token ? `${rawEpHls}&${token}` : rawEpHls) : '';
-                seasonsMap[sNum].push({
-                  season: sNum,
-                  episode: epNum,
-                  title: ep.title || `Серия ${epNum}`,
-                  duration: Math.round((ep.duration || 2700) / 60),
-                  hlsUrl: signedHls ? `/api/hls-proxy?url=${encodeURIComponent(signedHls)}` : '',
-                  rawHls: signedHls,
-                  voices: epVoices,
-                  voiceTracks,
-                  subtitles: (ep.cc || []).map(c => ({
-                    name: c.name,
-                    url: `/api/hls-proxy?url=${encodeURIComponent(c.url)}`
-                  }))
-                });
-              }
-            }
-
-            const result = {
-              found: true,
-              isSeries: true,
-              embedUrl: mirror + p,
-              seasons: seasonsMap,
-              voices: Array.from(allVoicesSet)
-            };
-            streamCache.set(cacheKey, { ts: Date.now(), data: result });
-            return result;
-          }
-        }
-
-        // Case 2: Movie with source: { hls, audio, cc }
-        const hlsMatch = mkBlock.match(/hls\s*:\s*"([^"]+)"/);
-        if (hlsMatch) {
-          const rawMovieHls = hlsMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
-          const signedHls = token ? `${rawMovieHls}&${token}` : rawMovieHls;
-          const voiceTracks = extractAudioFromBlock(mkBlock);
-          const voices = voiceTracks.map(t => t.name);
-
-          const hlsProxyUrl = `/api/hls-proxy?url=${encodeURIComponent(signedHls)}`;
-          const result = {
-            found: true,
-            isSeries: false,
-            embedUrl: mirror + p,
-            voices,
-            seasons: {
-              1: [
-                {
-                  season: 1,
-                  episode: 1,
-                  title: 'Полный фильм',
-                  duration: 130,
-                  hlsUrl: hlsProxyUrl,
-                  rawHls: signedHls,
-                  voices,
-                  voiceTracks,
-                  subtitles: extractSubtitlesFromBlock(mkBlock)
-                }
-              ]
-            }
-          };
-          streamCache.set(cacheKey, { ts: Date.now(), data: result });
-          return result;
-        }
-      } catch (e) {
-        // try next mirror/path
+      const result = await fetchMakePlayerStream(mirror + p);
+      if (result && result.found) {
+        streamCache.set(cacheKey, { ts: Date.now(), data: result });
+        return result;
       }
     }
   }
@@ -589,7 +605,7 @@ async function handleDetails(imdbId, fallbackTitle, preferredMirror = 'direct', 
     { id: 'direct', name: 'СПБГУКА Direct HLS (SSAI Ad-Shield)', badge: '1080p FHD / Multi-Audio', speed: '120 Мбит/с' },
     { id: 'animevost', name: 'AnimeVost (Прямой MP4 для аниме • 0% рекламы)', badge: '720p HD / MP4', speed: '115 Мбит/с' },
     { id: 'anilibria', name: 'AniLibria / AniLiberty (Чистый HLS • 0% рекламы)', badge: '1080p FHD / HLS', speed: '125 Мбит/с' },
-    { id: 'kinogo', name: 'Kinogo / Alloha (Независимый источник для кино)', badge: '1080p FHD / Embed', speed: '110 Мбит/с' },
+    { id: 'kinogo', name: 'Kinogo / Киного (Прямой HLS • Без рекламы)', badge: '1080p FHD / HLS', speed: '115 Мбит/с' },
     { id: 'namy', name: 'Collaps HLS Mirror (Ad-Shield)', badge: '1080p FHD', speed: '110 Мбит/с' },
     { id: 'kinogram', name: 'Kinogram HLS Mirror (Ad-Shield)', badge: '1080p FHD', speed: '105 Мбит/с' },
     { id: 'delivembd', name: 'Delivembed HLS Mirror (Ad-Shield)', badge: '1080p FHD', speed: '98 Мбит/с' },
@@ -1590,52 +1606,40 @@ async function resolveKinogoSource({ imdbId = '', kpId = '', title = '', year = 
   const eNum = Number(episode) || 0;
   const isEpisodic = type === 'series' || type === 'anime' || type === 'cartoon';
   const epQuery = (isEpisodic && sNum > 0 && eNum > 0) ? `&season=${sNum}&episode=${eNum}` : '';
-  const cacheKey = `kinogo:${imdbId}:${kpId}:${normalizeTitlePlain(title)}:${epQuery}`;
-  const cached = sourceCache.get(cacheKey);
-  if (cached && (Date.now() - cached.ts) < SOURCE_CACHE_TTL_MS) {
-    return cached.data;
+  const hlsCacheKey = `kinogo:hls:${imdbId}:${kpId}:${normalizeTitlePlain(title)}:${type}`;
+  const cachedHls = sourceCache.get(hlsCacheKey);
+  if (cachedHls && (Date.now() - cachedHls.ts) < SOURCE_CACHE_TTL_MS && cachedHls.data?.found) {
+    return cachedHls.data;
   }
 
-  const { origin, token } = await getLiveKinogoAllohaConfig();
+  const qualities = ['Авто (Макс. 1080p)', '1080p FHD', '720p HD', '480p SD', '360p'];
 
-  // Step A: Direct IMDb / Kinopoisk ID lookup on Kinogo Alloha origin
-  const idLookups = [];
-  if (imdbId) idLookups.push(`imdb=${encodeURIComponent(imdbId)}`);
-  if (kpId) idLookups.push(`kp=${encodeURIComponent(kpId)}`);
+  // Step A: Primary — Kinogo Player 1 Direct HLS (api.embf.net, 0% VAST video ads)
+  const embfPaths = [];
+  if (imdbId) embfPaths.push(`/embed/imdb/${encodeURIComponent(imdbId)}`);
+  if (kpId) embfPaths.push(`/embed/kp/${encodeURIComponent(kpId)}`);
 
-  for (const idParam of idLookups) {
-    const probeUrl = `${origin}/?${idParam}&token=${encodeURIComponent(token)}${epQuery}`;
-    try {
-      const c = new AbortController();
-      const t = setTimeout(() => c.abort(), 5500);
-      const r = await fetch(probeUrl, {
-        headers: { 'User-Agent': UPSTREAM_UA, 'Referer': 'https://kinogo.bot/' },
-        signal: c.signal
-      });
-      clearTimeout(t);
-      if (!r.ok) continue;
-      const html = await r.text();
-      if (!html.includes('const fileList = JSON.parse')) continue;
-
-      let matchedTitle = title;
-      const tm = html.match(/"title"\s*:\s*"([^"]+)"/);
-      if (tm) {
-        try { matchedTitle = JSON.parse(`"${tm[1]}"`); } catch (e) {}
-      }
-
+  for (const p of embfPaths) {
+    const parsed = await fetchMakePlayerStream(`https://api.embf.net${p}`, { 'Referer': 'https://kinogo.bot/' });
+    if (parsed && parsed.found && parsed.seasons) {
       const result = {
         found: true,
         source: 'kinogo',
-        embedUrl: probeUrl,
-        sourceTitle: matchedTitle,
-        origin
+        mode: 'hls',
+        isSeries: parsed.isSeries,
+        embedUrl: parsed.embedUrl,
+        seasons: parsed.seasons,
+        voices: parsed.voices,
+        qualities
       };
-      sourceCache.set(cacheKey, { ts: Date.now(), data: result });
+      sourceCache.set(hlsCacheKey, { ts: Date.now(), data: result });
       return result;
-    } catch (e) {}
+    }
   }
 
-  // Step B: Fallback title search on kinogo.bot
+  // Step B: Search kinogo.bot page -> extract Player 1 Direct HLS (api.embf.net/embed/...) or capture backup Player 2 Alloha iframe
+  let backupAllohaIframe = '';
+  let backupLabel = title;
   if (title) {
     try {
       const c = new AbortController();
@@ -1669,6 +1673,7 @@ async function resolveKinogoSource({ imdbId = '', kpId = '', title = '', year = 
         }
         const bestPage = [...byUrl.values()].sort((a, b) => b.score - a.score)[0];
         if (bestPage) {
+          backupLabel = bestPage.label;
           const c2 = new AbortController();
           const t2 = setTimeout(() => c2.abort(), 5500);
           const pr = await fetch(bestPage.url, {
@@ -1678,30 +1683,99 @@ async function resolveKinogoSource({ imdbId = '', kpId = '', title = '', year = 
           clearTimeout(t2);
           if (pr.ok) {
             const pHtml = await pr.text();
-            const iframeMatch = pHtml.match(/<iframe[^>]+(?:src|data-src)="(https:\/\/[^"]+\/\?token_movie=[^"]+)"/i);
-            if (iframeMatch) {
-              const baseIframe = iframeMatch[1];
-              const finalUrl = epQuery && !baseIframe.includes('season=')
-                ? `${baseIframe}${baseIframe.includes('?') ? '&' : '?'}${epQuery.slice(1)}`
-                : baseIframe;
-              const result = {
-                found: true,
-                source: 'kinogo',
-                embedUrl: finalUrl,
-                sourceTitle: bestPage.label,
-                origin
-              };
-              sourceCache.set(cacheKey, { ts: Date.now(), data: result });
-              return result;
+            const embfMatch = pHtml.match(/<iframe[^>]+(?:src|data-src)="((?:https?:)?\/\/api\.embf\.net\/embed\/[^"]+)"/i);
+            if (embfMatch) {
+              const embfUrl = embfMatch[1].startsWith('//') ? `https:${embfMatch[1]}` : embfMatch[1];
+              const parsed = await fetchMakePlayerStream(embfUrl, { 'Referer': 'https://kinogo.bot/' });
+              if (parsed && parsed.found && parsed.seasons) {
+                const result = {
+                  found: true,
+                  source: 'kinogo',
+                  mode: 'hls',
+                  isSeries: parsed.isSeries,
+                  sourceTitle: bestPage.label,
+                  embedUrl: embfUrl,
+                  seasons: parsed.seasons,
+                  voices: parsed.voices,
+                  qualities
+                };
+                sourceCache.set(hlsCacheKey, { ts: Date.now(), data: result });
+                return result;
+              }
             }
+            const allohaMatch = pHtml.match(/<iframe[^>]+(?:src|data-src)="(https:\/\/[^"]+\/\?token_movie=[^"]+)"/i);
+            if (allohaMatch) backupAllohaIframe = allohaMatch[1];
           }
         }
       }
     } catch (e) {}
   }
 
+  // Step C: Last-resort rare fallback — Kinogo Player 2 Alloha embed (if Player 1 Direct HLS was missing)
+  const embedCacheKey = `kinogo:embed:${imdbId}:${kpId}:${normalizeTitlePlain(title)}:${epQuery}`;
+  const cachedEmbed = sourceCache.get(embedCacheKey);
+  if (cachedEmbed && (Date.now() - cachedEmbed.ts) < SOURCE_CACHE_TTL_MS) {
+    return cachedEmbed.data;
+  }
+
+  const { origin, token } = await getLiveKinogoAllohaConfig();
+  const idLookups = [];
+  if (imdbId) idLookups.push(`imdb=${encodeURIComponent(imdbId)}`);
+  if (kpId) idLookups.push(`kp=${encodeURIComponent(kpId)}`);
+
+  for (const idParam of idLookups) {
+    const probeUrl = `${origin}/?${idParam}&token=${encodeURIComponent(token)}${epQuery}`;
+    try {
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 5500);
+      const r = await fetch(probeUrl, {
+        headers: { 'User-Agent': UPSTREAM_UA, 'Referer': 'https://kinogo.bot/' },
+        signal: c.signal
+      });
+      clearTimeout(t);
+      if (!r.ok) continue;
+      const html = await r.text();
+      if (!html.includes('const fileList = JSON.parse')) continue;
+
+      let matchedTitle = title;
+      const tm = html.match(/"title"\s*:\s*"([^"]+)"/);
+      if (tm) {
+        try { matchedTitle = JSON.parse(`"${tm[1]}"`); } catch (e) {}
+      }
+
+      const result = {
+        found: true,
+        source: 'kinogo',
+        mode: 'embed',
+        embedUrl: probeUrl,
+        sourceTitle: matchedTitle,
+        origin,
+        hasAdsWarning: true
+      };
+      sourceCache.set(embedCacheKey, { ts: Date.now(), data: result });
+      return result;
+    } catch (e) {}
+  }
+
+  if (backupAllohaIframe) {
+    const finalUrl = epQuery && !backupAllohaIframe.includes('season=')
+      ? `${backupAllohaIframe}${backupAllohaIframe.includes('?') ? '&' : '?'}${epQuery.slice(1)}`
+      : backupAllohaIframe;
+    const result = {
+      found: true,
+      source: 'kinogo',
+      mode: 'embed',
+      embedUrl: finalUrl,
+      sourceTitle: backupLabel,
+      origin,
+      hasAdsWarning: true
+    };
+    sourceCache.set(embedCacheKey, { ts: Date.now(), data: result });
+    return result;
+  }
+
   const miss = { found: false, source: 'kinogo' };
-  sourceCache.set(cacheKey, { ts: Date.now(), data: miss });
+  sourceCache.set(embedCacheKey, { ts: Date.now(), data: miss });
   return miss;
 }
 
