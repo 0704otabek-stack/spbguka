@@ -6,6 +6,15 @@ if (isSmartTv) {
   document.documentElement.classList.add('tv-mode');
 }
 
+function safeReadStorageArray(key) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 const state = {
   category: 'all',
   animeSubFilter: 'all',
@@ -16,8 +25,8 @@ const state = {
   masterCatalog: null,
   catalogItems: [],
   featuredItem: null,
-  favorites: JSON.parse(localStorage.getItem('spbguka_favorites') || '[]'),
-  history: JSON.parse(localStorage.getItem('spbguka_history') || '[]'),
+  favorites: safeReadStorageArray('spbguka_favorites'),
+  history: safeReadStorageArray('spbguka_history'),
   currentItem: null,
   activeTab: 'player',
   selectedBalancer: 'direct',
@@ -56,6 +65,9 @@ let authUser = localStorage.getItem('spbguka_auth_user') || '';
 let authMode = 'login';
 let accountSyncTimer = null;
 let lastAccountPullTs = 0;
+let hasCompletedInitialSync = false;
+let pendingSyncMode = 'merge';
+let pendingSyncExtra = {};
 
 let lastAnyTouchTs = 0;
 let isPlayerScreenLocked = false;
@@ -126,7 +138,8 @@ async function restoreAuthSessionFromCookie() {
         localStorage.setItem('spbguka_auth_user', authUser);
         updateAccountUI();
       }
-      if (typeof applySyncedUser === 'function') applySyncedUser(data.user);
+      if (typeof applySyncedUser === 'function') applySyncedUser(data.user, { trustServerReplace: false });
+      hasCompletedInitialSync = true;
       return true;
     }
     if (authToken && isConfirmedAuthInvalid(res.status, data)) {
@@ -1170,14 +1183,25 @@ function toggleFavorite(item) {
 }
 
 function addToHistory(item, season, episode, voice, quality, currentTime = 0, durationSeconds = 0) {
-  const prev = state.history.find(x => x.imdbId === item.imdbId);
+  const itemKey = String(item?.imdbId || item?.id || '').trim();
+  if (!itemKey) return;
+  const prev = state.history.find(x => String(x?.imdbId || x?.id || '') === itemKey);
+  const sameEpisode = Boolean(
+    prev &&
+    Number(prev.season || 1) === Number(season || 1) &&
+    Number(prev.episode || 1) === Number(episode || 1)
+  );
+  const numericTime = Number(currentTime);
+  const resolvedTime = (Number.isFinite(numericTime) && numericTime > 0)
+    ? Math.floor(numericTime)
+    : (sameEpisode ? Math.floor(Number(prev?.currentTime) || 0) : 0);
   const resolvedDuration = durationSeconds > 60
     ? Math.floor(durationSeconds)
     : (prev?.durationSeconds || (item.type === 'movie' ? 7200 : 3000));
 
   const entry = {
-    id: item.id,
-    imdbId: item.imdbId,
+    id: item.id || itemKey,
+    imdbId: item.imdbId || itemKey,
     kpId: item.kpId,
     title: item.title,
     originalTitle: item.originalTitle,
@@ -1195,15 +1219,19 @@ function addToHistory(item, season, episode, voice, quality, currentTime = 0, du
     episode,
     voice,
     quality,
-    currentTime: Math.floor(currentTime || 0),
+    currentTime: resolvedTime,
     durationSeconds: resolvedDuration,
     updatedAt: Date.now()
   };
 
-  state.history = [entry, ...state.history.filter(x => x.imdbId !== item.imdbId)].slice(0, 40);
+  state.history = [entry, ...state.history.filter(x => String(x?.imdbId || x?.id || '') !== itemKey)].slice(0, 40);
   localStorage.setItem('spbguka_history', JSON.stringify(state.history));
   updateBadges();
   updateAccountUI();
+  if (state.category === 'history') {
+    state.catalogItems = [...state.history];
+    renderCatalogGrid(state.catalogItems);
+  }
   scheduleAccountPush('merge', false);
 }
 
@@ -1212,13 +1240,25 @@ function saveLivePlaybackProgress() {
   const t = Math.floor(html5Video.currentTime || 0);
   const dur = Math.floor(html5Video.duration || 0);
   if (t <= 0) return;
-  const idx = state.history.findIndex(x => x.imdbId === state.currentItem.imdbId);
+  const itemKey = String(state.currentItem.imdbId || state.currentItem.id || '').trim();
+  if (!itemKey) return;
+  const idx = state.history.findIndex(x => String(x?.imdbId || x?.id || '') === itemKey);
   if (idx >= 0) {
     state.history[idx].currentTime = t;
     if (dur > 60) state.history[idx].durationSeconds = dur;
     state.history[idx].updatedAt = Date.now();
     localStorage.setItem('spbguka_history', JSON.stringify(state.history));
     scheduleAccountPush('merge', false);
+  } else {
+    addToHistory(
+      state.currentItem,
+      state.selectedSeason,
+      state.selectedEpisode,
+      state.selectedVoice,
+      state.selectedQuality,
+      t,
+      dur
+    );
   }
 }
 
@@ -1236,7 +1276,7 @@ function clearHistory() {
   localStorage.setItem('spbguka_history', '[]');
   updateBadges();
   updateAccountUI();
-  scheduleAccountPush('replace', false);
+  scheduleAccountPush('replace', false, { clearHistory: true });
   if (state.category === 'history') loadCatalog();
 }
 
@@ -1245,7 +1285,12 @@ function setAuthSession(token, username) {
   authToken = token || '';
   authUser = username || '';
   if (authToken) localStorage.setItem('spbguka_auth_token', authToken);
-  else localStorage.removeItem('spbguka_auth_token');
+  else {
+    localStorage.removeItem('spbguka_auth_token');
+    hasCompletedInitialSync = false;
+    pendingSyncMode = 'merge';
+    pendingSyncExtra = {};
+  }
   if (authUser) localStorage.setItem('spbguka_auth_user', authUser);
   else localStorage.removeItem('spbguka_auth_user');
   updateAccountUI();
@@ -1268,37 +1313,126 @@ function updateAccountUI() {
   }
 }
 
-function applySyncedUser(userPayload) {
+function mergeClientAndServerHistory(localList = [], serverList = [], historyClearedAt = 0) {
+  const keyOf = x => String(x?.imdbId || x?.id || '').trim();
+  const clearedAt = Number(historyClearedAt) || 0;
+  const byId = new Map();
+
+  for (const item of (Array.isArray(serverList) ? serverList : [])) {
+    const key = keyOf(item);
+    if (!key) continue;
+    byId.set(key, item);
+  }
+
+  for (const item of (Array.isArray(localList) ? localList : [])) {
+    const key = keyOf(item);
+    if (!key) continue;
+    const localUpdatedAt = Number(item.updatedAt) || 0;
+    if (clearedAt > 0 && localUpdatedAt <= clearedAt) continue;
+    const existing = byId.get(key);
+    if (!existing) {
+      byId.set(key, item);
+    } else {
+      const srvUpdatedAt = Number(existing.updatedAt) || 0;
+      if (localUpdatedAt > srvUpdatedAt || (localUpdatedAt === srvUpdatedAt && (Number(item.currentTime) || 0) > (Number(existing.currentTime) || 0))) {
+        byId.set(key, item);
+      }
+    }
+  }
+
+  return Array.from(byId.values())
+    .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
+    .slice(0, 40);
+}
+
+function mergeClientAndServerFavorites(localList = [], serverList = [], favoritesClearedAt = 0) {
+  const srv = Array.isArray(serverList) ? serverList : [];
+  if ((Number(favoritesClearedAt) || 0) > 0 && srv.length === 0) {
+    return [];
+  }
+  const seen = new Set();
+  const out = [];
+  for (const item of [...srv, ...(Array.isArray(localList) ? localList : [])]) {
+    const key = String(item?.imdbId || item?.id || '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= 80) break;
+  }
+  return out;
+}
+
+function applySyncedUser(userPayload, { trustServerReplace = false } = {}) {
   if (!userPayload) return;
   if (userPayload.username) {
     authUser = userPayload.username;
     localStorage.setItem('spbguka_auth_user', authUser);
   }
-  if (Array.isArray(userPayload.history)) {
-    state.history = userPayload.history;
+
+  const serverHistory = Array.isArray(userPayload.history) ? userPayload.history : null;
+  const serverFavorites = Array.isArray(userPayload.favorites) ? userPayload.favorites : null;
+  const isEphemeralEmpty = Boolean(userPayload.ephemeralRecovered);
+  const historyClearedAt = Number(userPayload.historyClearedAt) || 0;
+  const favoritesClearedAt = Number(userPayload.favoritesClearedAt) || 0;
+  let needsPushBack = false;
+
+  if (serverHistory !== null) {
+    if (trustServerReplace && !isEphemeralEmpty) {
+      state.history = serverHistory;
+    } else {
+      const merged = mergeClientAndServerHistory(state.history, serverHistory, historyClearedAt);
+      const serverById = new Map();
+      for (const s of serverHistory) {
+        const k = String(s?.imdbId || s?.id || '').trim();
+        if (k) serverById.set(k, s);
+      }
+      for (const m of merged) {
+        const k = String(m?.imdbId || m?.id || '').trim();
+        const srv = serverById.get(k);
+        if (!srv || (Number(m.updatedAt) || 0) > (Number(srv.updatedAt) || 0)) {
+          needsPushBack = true;
+          break;
+        }
+      }
+      if (isEphemeralEmpty && merged.length > 0) {
+        needsPushBack = true;
+      }
+      state.history = merged;
+    }
     localStorage.setItem('spbguka_history', JSON.stringify(state.history));
   }
-  if (Array.isArray(userPayload.favorites)) {
-    state.favorites = userPayload.favorites;
+
+  if (serverFavorites !== null) {
+    if (trustServerReplace && !isEphemeralEmpty) {
+      state.favorites = serverFavorites;
+    } else {
+      const mergedFavs = mergeClientAndServerFavorites(state.favorites, serverFavorites, favoritesClearedAt);
+      if (mergedFavs.length > serverFavorites.length || (isEphemeralEmpty && mergedFavs.length > 0)) {
+        needsPushBack = true;
+      }
+      state.favorites = mergedFavs;
+    }
     localStorage.setItem('spbguka_favorites', JSON.stringify(state.favorites));
   }
+
   reconcileSavedItemsWithCatalog();
   updateBadges();
   updateAccountUI();
-  if (state.catalogItems && state.catalogItems.length > 0) {
-    if (state.category === 'history' || state.category === 'favorites') {
-      loadCatalog();
-    } else {
-      renderCatalogGrid(state.catalogItems);
-    }
+  if (state.category === 'history' || state.category === 'favorites') {
+    loadCatalog();
+  } else if (state.catalogItems && state.catalogItems.length > 0) {
+    renderCatalogGrid(state.catalogItems);
   }
   if (profileSyncStatus) {
     const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     profileSyncStatus.textContent = `Синхронизировано в ${timeStr}`;
   }
+  if (needsPushBack && authToken) {
+    scheduleAccountPush('merge', false);
+  }
 }
 
-async function pushAccountSync(mode = 'merge', keepalive = false) {
+async function pushAccountSync(mode = 'merge', keepalive = false, extraOpts = {}) {
   if (!authToken) return false;
   try {
     const res = await fetch('/api/account/sync', {
@@ -1312,7 +1446,9 @@ async function pushAccountSync(mode = 'merge', keepalive = false) {
       body: JSON.stringify({
         mode,
         history: state.history,
-        favorites: state.favorites
+        favorites: state.favorites,
+        clearHistory: Boolean(extraOpts.clearHistory),
+        clearFavorites: Boolean(extraOpts.clearFavorites)
       })
     });
     if (res.status === 503) return false;
@@ -1322,9 +1458,10 @@ async function pushAccountSync(mode = 'merge', keepalive = false) {
       return false;
     }
     if (!res.ok) return false;
+    hasCompletedInitialSync = true;
     applyRefreshedToken(data);
     if (data && data.user && mode === 'merge') {
-      applySyncedUser(data.user);
+      applySyncedUser(data.user, { trustServerReplace: !data.user.ephemeralRecovered });
     } else if (profileSyncStatus) {
       const timeStr = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
       profileSyncStatus.textContent = `Сохранено в ${timeStr}`;
@@ -1335,18 +1472,30 @@ async function pushAccountSync(mode = 'merge', keepalive = false) {
   }
 }
 
-function scheduleAccountPush(mode = 'merge', immediate = false) {
+function scheduleAccountPush(mode = 'merge', immediate = false, extraOpts = {}) {
   if (!authToken) return;
+  if (mode === 'replace') pendingSyncMode = 'replace';
+  else if (!accountSyncTimer) pendingSyncMode = 'merge';
+  pendingSyncExtra = { ...pendingSyncExtra, ...extraOpts };
+
   if (immediate) {
     if (accountSyncTimer) clearTimeout(accountSyncTimer);
     accountSyncTimer = null;
-    pushAccountSync(mode, true);
+    const sendMode = (mode === 'replace' || pendingSyncMode === 'replace') ? 'replace' : mode;
+    const sendExtra = pendingSyncExtra;
+    pendingSyncMode = 'merge';
+    pendingSyncExtra = {};
+    pushAccountSync(sendMode, true, sendExtra);
     return;
   }
   if (accountSyncTimer) clearTimeout(accountSyncTimer);
   accountSyncTimer = setTimeout(() => {
     accountSyncTimer = null;
-    pushAccountSync(mode, false);
+    const sendMode = pendingSyncMode;
+    const sendExtra = pendingSyncExtra;
+    pendingSyncMode = 'merge';
+    pendingSyncExtra = {};
+    pushAccountSync(sendMode, false, sendExtra);
   }, 1200);
 }
 
@@ -1355,6 +1504,19 @@ async function pullAccountSync(force = false) {
   const now = Date.now();
   if (!force && (now - lastAccountPullTs) < 8000) return false;
   lastAccountPullTs = now;
+
+  if (accountSyncTimer !== null || (!hasCompletedInitialSync && (state.history.length > 0 || state.favorites.length > 0))) {
+    if (accountSyncTimer) {
+      clearTimeout(accountSyncTimer);
+      accountSyncTimer = null;
+    }
+    const flushMode = pendingSyncMode || 'merge';
+    const flushExtra = pendingSyncExtra;
+    pendingSyncMode = 'merge';
+    pendingSyncExtra = {};
+    return await pushAccountSync(flushMode, false, flushExtra);
+  }
+
   try {
     const res = await fetch('/api/account/sync', {
       credentials: 'include',
@@ -1374,7 +1536,8 @@ async function pullAccountSync(force = false) {
     if (!res.ok) return false;
     const data = await res.json();
     if (data && data.user) {
-      applySyncedUser(data.user);
+      hasCompletedInitialSync = true;
+      applySyncedUser(data.user, { trustServerReplace: false });
       return true;
     }
   } catch (e) {}
@@ -2610,11 +2773,12 @@ async function loadMoreCatalogItems() {
   }
 }
 
-function renderCatalogGrid(items) {
-  resultsCount.textContent = items.length;
+function renderCatalogGrid(items = state.catalogItems || []) {
+  const safeItems = Array.isArray(items) ? items : [];
+  resultsCount.textContent = safeItems.length;
   catalogGrid.innerHTML = '';
 
-  if (items.length === 0) {
+  if (safeItems.length === 0) {
     emptyState.classList.remove('hidden');
     updateLoadMoreUi();
     return;
@@ -2624,7 +2788,7 @@ function renderCatalogGrid(items) {
   const favIds = new Set(state.favorites.map(f => f.imdbId));
   const historyMap = new Map(state.history.map(h => [h.imdbId, h]));
 
-  for (const item of items) {
+  for (const item of safeItems) {
     catalogGrid.appendChild(createMovieCardElement(item, favIds, historyMap));
   }
   updateLoadMoreUi();
@@ -2873,6 +3037,17 @@ async function openItemModal(itemSummary, initialTab = 'player', lobbyOverride =
   updateBalancerButtons();
   switchModalTab(initialTab);
   nowPlayingText.textContent = `Подключение потока: ${resolvedSummary.title}...`;
+  if (initialTab === 'player' && !lobbyOverride) {
+    addToHistory(
+      state.currentItem,
+      state.selectedSeason,
+      state.selectedEpisode,
+      state.selectedVoice,
+      state.selectedQuality,
+      savedHistory?.currentTime || 0,
+      savedHistory?.durationSeconds || 0
+    );
+  }
 
   const fallbackDetailed = {
     ...resolvedSummary,
@@ -4556,6 +4731,7 @@ function closeItemModal({ fromPopstate = false } = {}) {
   if (vcMoreMenu) vcMoreMenu.classList.add('hidden');
   exitVideoFullscreen({ fromPopstate: true });
   saveLivePlaybackProgress();
+  updateBadges();
   scheduleAccountPush('merge', true);
   modalOpenToken++;
   playbackRequestToken++;
@@ -5267,7 +5443,7 @@ if (resetFiltersBtn) {
 if (clearHistoryBtn) {
   clearHistoryBtn.addEventListener('click', () => {
     clearHistory();
-    renderCatalogGrid();
+    renderCatalogGrid(state.catalogItems || []);
   });
 }
 
@@ -6509,7 +6685,8 @@ if (authForm) {
         return;
       }
       setAuthSession(data.token, data.user?.username || username);
-      applySyncedUser(data.user);
+      hasCompletedInitialSync = true;
+      applySyncedUser(data.user, { trustServerReplace: true });
       authPasswordInput.value = '';
       accountModal.classList.add('hidden');
       popOverlayHistory('account');

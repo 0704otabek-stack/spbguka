@@ -2117,7 +2117,11 @@ async function getAuthenticatedUser(req) {
         createdAt: Date.now(),
         updatedAt: Date.now(),
         history: [],
-        favorites: []
+        favorites: [],
+        historyClearedAt: 0,
+        deletedHistory: {},
+        favoritesClearedAt: 0,
+        ephemeralRecovered: true
       };
       accountsDb.users[tokenData.usernameLower] = user;
       scheduleSaveAccounts(true);
@@ -2608,9 +2612,23 @@ function sanitizeHistoryList(list) {
     });
 }
 
-function mergeHistoryLists(serverList = [], clientList = []) {
+function mergeHistoryLists(serverList = [], clientList = [], deletionMeta = null) {
+  const clearedAt = Number(deletionMeta?.historyClearedAt) || 0;
+  const deletedMap = (deletionMeta?.deletedHistory && typeof deletionMeta.deletedHistory === 'object')
+    ? deletionMeta.deletedHistory
+    : null;
   const byId = new Map();
-  for (const item of [...sanitizeHistoryList(serverList), ...sanitizeHistoryList(clientList)]) {
+  for (const item of sanitizeHistoryList(serverList)) {
+    byId.set(item.imdbId, item);
+  }
+  for (const item of sanitizeHistoryList(clientList)) {
+    const itemDelAt = Math.max(clearedAt, Number(deletedMap?.[item.imdbId]) || 0);
+    if (itemDelAt > 0 && (item.updatedAt || 0) <= itemDelAt) {
+      continue;
+    }
+    if (deletedMap && deletedMap[item.imdbId] && (item.updatedAt || 0) > Number(deletedMap[item.imdbId])) {
+      delete deletedMap[item.imdbId];
+    }
     const existing = byId.get(item.imdbId);
     if (!existing || (item.updatedAt || 0) >= (existing.updatedAt || 0)) {
       byId.set(item.imdbId, item);
@@ -2662,7 +2680,11 @@ function publicUserPayload(user) {
     username: user.username,
     history: user.history || [],
     favorites: user.favorites || [],
-    updatedAt: user.updatedAt || Date.now()
+    updatedAt: user.updatedAt || Date.now(),
+    historyClearedAt: Number(user.historyClearedAt) || 0,
+    favoritesClearedAt: Number(user.favoritesClearedAt) || 0,
+    ephemeralRecovered: Boolean(user.ephemeralRecovered),
+    storage: pgPool ? 'postgres' : 'local-file'
   };
 }
 
@@ -3054,11 +3076,12 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 401, { error: 'Неверный никнейм или пароль' }, req);
       }
       if (Array.isArray(body.history) && body.history.length > 0) {
-        user.history = mergeHistoryLists(user.history, body.history);
+        user.history = mergeHistoryLists(user.history, body.history, user);
       }
       if (Array.isArray(body.favorites) && body.favorites.length > 0) {
         user.favorites = mergeFavoritesLists(user.favorites, body.favorites);
       }
+      user.ephemeralRecovered = false;
       user.updatedAt = Date.now();
       await saveUserProgress(user, true);
       const token = signAuthToken(key, user.username);
@@ -3089,17 +3112,52 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readJsonBody(req);
       const mode = body.mode === 'replace' ? 'replace' : 'merge';
-      if (Array.isArray(body.history)) {
-        user.history = mode === 'replace'
-          ? sanitizeHistoryList(body.history)
-          : mergeHistoryLists(user.history, body.history);
+      const now = Date.now();
+      if (mode === 'replace') {
+        if (Array.isArray(body.history)) {
+          const prevHistory = Array.isArray(user.history) ? user.history : [];
+          const nextHistory = sanitizeHistoryList(body.history);
+          const nextIds = new Set(nextHistory.map(x => x.imdbId));
+          user.deletedHistory = (user.deletedHistory && typeof user.deletedHistory === 'object')
+            ? { ...user.deletedHistory }
+            : {};
+          for (const prevItem of prevHistory) {
+            if (prevItem && prevItem.imdbId && !nextIds.has(prevItem.imdbId)) {
+              user.deletedHistory[prevItem.imdbId] = Math.max(now, Number(prevItem.updatedAt) || 0);
+            }
+          }
+          const delEntries = Object.entries(user.deletedHistory);
+          if (delEntries.length > 200) {
+            user.deletedHistory = Object.fromEntries(
+              delEntries.sort((a, b) => Number(b[1]) - Number(a[1])).slice(0, 200)
+            );
+          }
+          if (nextHistory.length === 0 && (body.clearHistory === true || prevHistory.length > 0)) {
+            const maxPrevTs = prevHistory.reduce((m, x) => Math.max(m, Number(x?.updatedAt) || 0), 0);
+            user.historyClearedAt = Math.max(now, maxPrevTs);
+          }
+          user.history = nextHistory;
+        }
+        if (Array.isArray(body.favorites)) {
+          const nextFavorites = sanitizeFavoritesList(body.favorites);
+          if (nextFavorites.length === 0 && body.clearFavorites === true) {
+            user.favoritesClearedAt = now;
+          }
+          user.favorites = nextFavorites;
+        }
+        user.ephemeralRecovered = false;
+      } else {
+        if (Array.isArray(body.history)) {
+          user.history = mergeHistoryLists(user.history, body.history, user);
+        }
+        if (Array.isArray(body.favorites)) {
+          user.favorites = mergeFavoritesLists(user.favorites, body.favorites);
+        }
+        if ((user.history && user.history.length > 0) || (user.favorites && user.favorites.length > 0)) {
+          user.ephemeralRecovered = false;
+        }
       }
-      if (Array.isArray(body.favorites)) {
-        user.favorites = mode === 'replace'
-          ? sanitizeFavoritesList(body.favorites)
-          : mergeFavoritesLists(user.favorites, body.favorites);
-      }
-      user.updatedAt = Date.now();
+      user.updatedAt = now;
       await saveUserProgress(user, false);
       const refreshedToken = signAuthToken(user.usernameLower, user.username);
       setAuthCookie(req, res, refreshedToken);
