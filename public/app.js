@@ -65,6 +65,25 @@ let sleepTimerMode = 'off';
 let sleepTimerTickInterval = null;
 let sleepEndAfterEpisode = false;
 
+const SKIP_STEP_STORAGE_KEY = 'spbguka_skip_seconds';
+const DEFAULT_SKIP_STEP_SECONDS = 120;
+const MIN_SKIP_STEP_SECONDS = 1;
+const MAX_SKIP_STEP_SECONDS = 900;
+
+function loadSkipStepSeconds() {
+  try {
+    const raw = localStorage.getItem(SKIP_STEP_STORAGE_KEY);
+    if (raw === null || raw === '') return DEFAULT_SKIP_STEP_SECONDS;
+    const parsed = Math.round(Number(raw));
+    if (!Number.isFinite(parsed) || parsed < MIN_SKIP_STEP_SECONDS) return DEFAULT_SKIP_STEP_SECONDS;
+    return Math.min(MAX_SKIP_STEP_SECONDS, parsed);
+  } catch {
+    return DEFAULT_SKIP_STEP_SECONDS;
+  }
+}
+
+let skipStepSeconds = loadSkipStepSeconds();
+
 function isCoarsePointerDevice() {
   return Boolean(
     window.matchMedia?.('(pointer: coarse)')?.matches ||
@@ -823,6 +842,10 @@ const vcMoreMenu = document.getElementById('vcMoreMenu');
 const vcMoreCloseBtn = document.getElementById('vcMoreCloseBtn');
 const vcSpeedChips = document.getElementById('vcSpeedChips');
 const vcMenuCurrentSpeed = document.getElementById('vcMenuCurrentSpeed');
+const vcSkipChips = document.getElementById('vcSkipChips');
+const vcMenuCurrentSkip = document.getElementById('vcMenuCurrentSkip');
+const vcSkipCustomInput = document.getElementById('vcSkipCustomInput');
+const vcSkipApplyBtn = document.getElementById('vcSkipApplyBtn');
 const vcQualityChips = document.getElementById('vcQualityChips');
 const vcMenuCurrentQuality = document.getElementById('vcMenuCurrentQuality');
 const vcAudioChips = document.getElementById('vcAudioChips');
@@ -3640,15 +3663,10 @@ function getAdjacentEpisodeTarget(delta) {
 
 function updateSmartVideoOverlay() {
   if (!overlay120Group) return;
-  const cur = Number.isFinite(html5Video.currentTime) ? html5Video.currentTime : 0;
-  const dur = (Number.isFinite(html5Video.duration) && html5Video.duration > 0) ? html5Video.duration : 0;
-  const isFirstHalf = (dur === 0) || (cur <= dur * 0.5);
+  if (lastSmartOverlayKey === 'always') return;
+  lastSmartOverlayKey = 'always';
 
-  const key = `${isFirstHalf ? 1 : 0}`;
-  if (key === lastSmartOverlayKey) return;
-  lastSmartOverlayKey = key;
-
-  overlay120Group.classList.toggle('hidden', !isFirstHalf);
+  overlay120Group.classList.remove('hidden');
   if (overlayNextEpBtn) {
     overlayNextEpBtn.classList.add('hidden');
   }
@@ -3765,12 +3783,74 @@ function switchSubtitleTrack(subObj) {
   }
 }
 
+function updateSkipStepUi() {
+  const sec = skipStepSeconds;
+  if (overlayRewind120Btn) {
+    overlayRewind120Btn.title = `Отмотать на ${sec} секунд назад`;
+    const span = overlayRewind120Btn.querySelector('span');
+    if (span) span.textContent = `↺ -${sec} сек`;
+    else overlayRewind120Btn.textContent = `↺ -${sec} сек`;
+  }
+  if (overlayForward120Btn) {
+    overlayForward120Btn.title = `Перемотать на ${sec} секунд вперёд`;
+    const span = overlayForward120Btn.querySelector('span');
+    if (span) span.textContent = `+${sec} сек ⏭`;
+    else overlayForward120Btn.textContent = `+${sec} сек ⏭`;
+  }
+  if (rewind120Btn) {
+    rewind120Btn.title = `Отмотать на ${sec} секунд назад`;
+    rewind120Btn.textContent = `-${sec} сек`;
+  }
+  if (skip120Btn) {
+    skip120Btn.title = `Перемотать на ${sec} секунд вперёд`;
+    skip120Btn.textContent = `+${sec} сек`;
+  }
+  if (vcMenuCurrentSkip) {
+    vcMenuCurrentSkip.textContent = `${sec} сек`;
+  }
+  if (vcSkipChips) {
+    vcSkipChips.querySelectorAll('.vc-menu-chip[data-skip]').forEach(chip => {
+      chip.classList.toggle('active', Number(chip.dataset.skip) === sec);
+    });
+  }
+  if (vcSkipCustomInput && document.activeElement !== vcSkipCustomInput) {
+    vcSkipCustomInput.value = String(sec);
+  }
+}
+
+function setSkipStepSeconds(rawValue, options = {}) {
+  const normalizedRaw = String(rawValue ?? '').trim().replace(',', '.');
+  const parsed = Number(normalizedRaw);
+  if (!normalizedRaw || !Number.isFinite(parsed) || parsed < MIN_SKIP_STEP_SECONDS) {
+    if (vcSkipCustomInput) vcSkipCustomInput.value = String(skipStepSeconds);
+    if (options.showToast) {
+      showPlayerOsd(`Введите число от ${MIN_SKIP_STEP_SECONDS} до ${MAX_SKIP_STEP_SECONDS} сек`);
+    }
+    return false;
+  }
+  const clamped = Math.max(MIN_SKIP_STEP_SECONDS, Math.min(MAX_SKIP_STEP_SECONDS, Math.round(parsed)));
+  const changed = clamped !== skipStepSeconds;
+  skipStepSeconds = clamped;
+  try {
+    localStorage.setItem(SKIP_STEP_STORAGE_KEY, String(clamped));
+  } catch {}
+  updateSkipStepUi();
+  if (vcSkipCustomInput) {
+    vcSkipCustomInput.value = String(clamped);
+  }
+  if (options.showToast && (changed || !options.silentIfUnchanged)) {
+    showPlayerOsd(`Шаг перемотки: ±${clamped} сек`);
+  }
+  return true;
+}
+
 function toggleVcMoreMenu() {
   if (!vcMoreMenu) return;
   const isHidden = vcMoreMenu.classList.contains('hidden');
   vcMoreMenu.classList.toggle('hidden', !isHidden);
   revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
   if (isHidden) {
+    updateSkipStepUi();
     pushOverlayHistory('vcMore');
     const firstFocusable = vcMoreMenu.querySelector('.focusable');
     if (firstFocusable && isSmartTv) firstFocusable.focus();
@@ -5621,16 +5701,16 @@ if (vcSleepChips) {
 }
 
 if (overlayForward120Btn) {
-  overlayForward120Btn.addEventListener('click', () => seekRelative(120));
+  overlayForward120Btn.addEventListener('click', () => seekRelative(skipStepSeconds));
 }
 if (overlayRewind120Btn) {
-  overlayRewind120Btn.addEventListener('click', () => seekRelative(-120));
+  overlayRewind120Btn.addEventListener('click', () => seekRelative(-skipStepSeconds));
 }
 if (skip120Btn) {
-  skip120Btn.addEventListener('click', () => seekRelative(120));
+  skip120Btn.addEventListener('click', () => seekRelative(skipStepSeconds));
 }
 if (rewind120Btn) {
-  rewind120Btn.addEventListener('click', () => seekRelative(-120));
+  rewind120Btn.addEventListener('click', () => seekRelative(-skipStepSeconds));
 }
 
 // Three-Dots ("...") Player Settings Menu Event Handlers
@@ -5669,6 +5749,43 @@ if (vcSpeedChips) {
         showPlayerOsd(`Скорость: ${spd}x`);
       }
     });
+  });
+}
+if (vcSkipChips) {
+  vcSkipChips.querySelectorAll('.vc-menu-chip[data-skip]').forEach(chip => {
+    chip.addEventListener('click', e => {
+      e.stopPropagation();
+      setSkipStepSeconds(chip.dataset.skip, { showToast: true });
+      revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    });
+  });
+}
+if (vcSkipApplyBtn) {
+  vcSkipApplyBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    setSkipStepSeconds(vcSkipCustomInput ? vcSkipCustomInput.value : skipStepSeconds, { showToast: true });
+    if (vcSkipCustomInput) vcSkipCustomInput.blur();
+    revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+  });
+}
+if (vcSkipCustomInput) {
+  vcSkipCustomInput.addEventListener('click', e => e.stopPropagation());
+  vcSkipCustomInput.addEventListener('dblclick', e => e.stopPropagation());
+  vcSkipCustomInput.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      setSkipStepSeconds(vcSkipCustomInput.value, { showToast: true });
+      vcSkipCustomInput.blur();
+      revealVideoOverlayControls(DEFAULT_CONTROLS_HIDE_MS);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      vcSkipCustomInput.value = String(skipStepSeconds);
+      vcSkipCustomInput.blur();
+    }
+  });
+  vcSkipCustomInput.addEventListener('change', () => {
+    setSkipStepSeconds(vcSkipCustomInput.value, { showToast: true, silentIfUnchanged: true });
   });
 }
 if (vcDownloadBtn) {
@@ -6778,6 +6895,7 @@ if (loadMoreBtn) {
 
 // Initialize
 applySavedAudioPreferences();
+updateSkipStepUi();
 updateCustomVideoBar();
 updateBadges();
 updateAccountUI();

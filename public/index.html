@@ -20,7 +20,7 @@
       document.documentElement.classList.add('tv-mode');
     }
   </script>
-  <link rel="stylesheet" href="/styles.css?v=25" />
+  <link rel="stylesheet" href="/styles.css?v=26" />
 </head>
 <body>
   <!-- Top Header -->
@@ -555,6 +555,38 @@
                       <button class="vc-menu-chip focusable" data-speed="1.25" type="button">1.25x</button>
                       <button class="vc-menu-chip focusable" data-speed="1.5" type="button">1.5x</button>
                       <button class="vc-menu-chip focusable" data-speed="2.0" type="button">2.0x</button>
+                    </div>
+                  </div>
+
+                  <!-- Skip Step Section -->
+                  <div class="vc-menu-section">
+                    <div class="vc-menu-title">
+                      <span>⏩ Шаг перемотки</span>
+                      <span id="vcMenuCurrentSkip" class="vc-menu-badge">120 сек</span>
+                    </div>
+                    <div class="vc-menu-chips" id="vcSkipChips">
+                      <button class="vc-menu-chip focusable" data-skip="5" type="button">5с</button>
+                      <button class="vc-menu-chip focusable" data-skip="15" type="button">15с</button>
+                      <button class="vc-menu-chip focusable" data-skip="30" type="button">30с</button>
+                      <button class="vc-menu-chip focusable" data-skip="60" type="button">60с</button>
+                      <button class="vc-menu-chip focusable" data-skip="90" type="button">90с</button>
+                      <button class="vc-menu-chip active focusable" data-skip="120" type="button">120с</button>
+                    </div>
+                    <div class="vc-skip-custom-row">
+                      <input
+                        id="vcSkipCustomInput"
+                        class="vc-skip-input focusable"
+                        type="number"
+                        inputmode="numeric"
+                        min="1"
+                        max="900"
+                        step="1"
+                        value="120"
+                        placeholder="Своё (сек)"
+                        aria-label="Свой шаг перемотки в секундах"
+                      />
+                      <span class="vc-skip-unit">сек</span>
+                      <button id="vcSkipApplyBtn" class="vc-skip-apply-btn focusable" type="button">OK</button>
                     </div>
                   </div>
 
@@ -1230,6 +1262,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=27"></script>
+  <script src="/app.js?v=28"></script>
 </body>
 </html>

@@ -2000,6 +2000,74 @@ body.pseudo-fullscreen-open .modal-window {
   box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
 }
 
+.vc-skip-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.vc-skip-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.14s ease, background 0.14s ease;
+  -moz-appearance: textfield;
+}
+
+.vc-skip-input::-webkit-outer-spin-button,
+.vc-skip-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.vc-skip-input:focus {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.vc-skip-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+  font-weight: 400;
+}
+
+.vc-skip-unit {
+  font-size: 0.74rem;
+  color: rgba(255, 255, 255, 0.65);
+  flex-shrink: 0;
+}
+
+.vc-skip-apply-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: filter 0.14s ease, transform 0.1s ease;
+}
+
+.vc-skip-apply-btn:hover {
+  filter: brightness(1.1);
+}
+
+.vc-skip-apply-btn:active {
+  transform: scale(0.97);
+}
+
 .vc-menu-action-btn {
   display: flex;
   align-items: center;
@@ -4086,6 +4154,28 @@ body.pseudo-fullscreen-open .modal-window {
     padding: 7px 13px;
     font-size: 0.8rem;
   }
+  .video-stage-area:not(.is-fullscreen):not(.pseudo-fullscreen) .vc-more-menu {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: auto;
+    max-width: 420px;
+    margin: 0 auto;
+    max-height: min(72dvh, 460px);
+    z-index: 260;
+    border-radius: 18px;
+    background: rgba(16, 20, 30, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 20px 56px rgba(0, 0, 0, 0.92);
+  }
+  .player-tools {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .player-tools .btn-ghost {
+    white-space: nowrap;
+  }
 }
 
 @media (max-width: 520px) {
@@ -4215,6 +4305,8 @@ html.tv-mode .overlay-120-group,
 html.tv-mode .custom-video-bar,
 html.tv-mode .video-center-play,
 html.tv-mode .vc-btn,
+html.tv-mode .vc-skip-input,
+html.tv-mode .vc-skip-apply-btn,
 html.tv-mode .install-pill,
 html.tv-mode .lobby-pill,
 html.tv-mode .btn-primary {
